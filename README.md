@@ -7,6 +7,7 @@ Highlights
 - Direct calls to your n8n webhook with a Test/Prod toggle.
 - Callback polling via `/api/jarvis/callback/:id` with automatic retries and timeout.
 - Optional per‑user API key overrides for OpenAI and ElevenLabs from the Settings panel.
+	- ElevenLabs default voice is now `7dxS4V4NqL8xqL4PSiMp`. Users with their own ElevenLabs key can set a custom Voice ID in Settings and switch back anytime.
 
 ## Quick start
 
@@ -55,6 +56,7 @@ See also: `docs/N8N.md` for detailed n8n HTTP Request node examples (push/push-v
 
 Per-user API keys (optional)
 - Users can supply their own OpenAI and ElevenLabs keys from the Settings panel. The frontend sends them via headers (`x-openai-key`, `x-elevenlabs-key`) so STT/TTS calls use user-supplied credentials; otherwise server defaults are used.
+ - When a user supplies their own ElevenLabs key, they may also provide a Voice ID. The frontend sends `x-elevenlabs-voice-id`, and the backend will use it together with the custom key. Without a custom key, the backend uses the project’s default voice.
 
 ## Development without Docker
 

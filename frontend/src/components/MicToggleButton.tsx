@@ -57,9 +57,15 @@ export default function MicToggleButton({ onAudioReady, disabled }: Props) {
   }
 
   function stop() {
-    try { recorderRef.current?.stop() } catch {}
-    cleanup()
-    setIsRecording(false)
+    const rec = recorderRef.current
+    if (!rec) { cleanup(); setIsRecording(false); return }
+    const finalize = () => { cleanup(); setIsRecording(false) }
+    try {
+      rec.addEventListener('stop', finalize, { once: true })
+      rec.stop()
+    } catch {
+      finalize()
+    }
   }
 
   function cleanup() {
@@ -77,7 +83,7 @@ export default function MicToggleButton({ onAudioReady, disabled }: Props) {
       disabled={disabled}
       onClick={() => isRecording ? stop() : start()}
       onKeyDown={(e) => { if ((e.key === ' ' || e.key === 'Enter') && !disabled) { e.preventDefault(); isRecording ? stop() : start() } }}
-      className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 border ${isRecording ? 'bg-red-600 text-white' : 'bg-white/70 dark:bg-slate-900/60'} relative`}
+  className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 border border-cyan-200/20 ${isRecording ? 'bg-red-600 text-white' : 'bg-white/5'} relative`}
     >
       <span className="relative flex items-center gap-2">
         <span className={`w-2 h-2 rounded-full ${isRecording ? 'bg-red-300 animate-pulse' : 'bg-slate-400'}`} />

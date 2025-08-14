@@ -216,10 +216,10 @@ function ChatSheet({ open, onClose, webhookUrl }) {
   return (
     <div className={`fixed inset-0 bg-black/40 transition ${open?'opacity-100 pointer-events-auto':'opacity-0 pointer-events-none'}`} onClick={onClose}>
       <div className="absolute right-0 top-0 h-full w-full sm:w-[460px] glass p-4 flex flex-col" onClick={e=>e.stopPropagation()}>
-        <h2 className="text-xl font-semibold mb-2">Chat</h2>
+        <h2 className="jarvis-title mb-2">Chat</h2>
         <div className="flex-1 overflow-y-auto space-y-2 pr-1">
           {messages.map((m)=> (
-            <div key={m.id} className={`max-w-[85%] rounded-2xl px-4 py-2 ${m.role==='user'?'bg-blue-600 text-white ml-auto': (m.error ? 'bg-red-100 dark:bg-red-900/40' : 'bg-slate-100 dark:bg-slate-800')}`}>
+            <div key={m.id} className={`max-w-[85%] rounded-2xl px-4 py-2 ${m.role==='user'? 'jarvis-bubble-user ml-auto' : (m.error ? 'bg-red-900/30 border border-red-500/30' : 'jarvis-bubble-ai')}`}>
               {m.audioUrl ? (
                 <audio controls src={m.audioUrl} className="w-full">
                   Your browser does not support the audio element.
@@ -231,7 +231,7 @@ function ChatSheet({ open, onClose, webhookUrl }) {
                     <span className="inline-block w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" aria-label="Loading" />
                   )}
                   {m.role==='assistant' && m.error && (
-                    <button className="ml-2 px-2 py-1 rounded border text-xs bg-white/70 dark:bg-white/10" onClick={()=>retryFrom(m)}>
+                    <button className="ml-2 px-2 py-1 rounded border text-xs bg-red-500/20 hover:bg-red-500/30" onClick={()=>retryFrom(m)}>
                       Retry
                     </button>
                   )}
@@ -241,8 +241,8 @@ function ChatSheet({ open, onClose, webhookUrl }) {
           ))}
         </div>
         <form className="mt-2 flex gap-2" onSubmit={e=>{e.preventDefault(); if(input.trim()) { send(input.trim()); setInput('') }}}>
-          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Type a message..." className="flex-1 border rounded-xl px-3 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" />
-          <button className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white">Send</button>
+          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Type a message..." className="jarvis-input" />
+          <button className="jarvis-btn jarvis-btn-primary">Send</button>
         </form>
       </div>
     </div>
@@ -274,7 +274,7 @@ export default function App() {
     form.append('correlationId', correlationId)
     form.append('callbackUrl', CALLBACK_URL)
     form.append('source', SOURCE_NAME)
-    const r = await fetch('/api/transcribe', { method: 'POST', body: form })
+  const r = await fetch('/api/transcribe', { method: 'POST', body: form, credentials: 'include' })
     if (r.ok) {
       const { text } = await r.json()
       await fetch(currentWebhookUrl, {
@@ -291,17 +291,17 @@ export default function App() {
   <div className={`min-h-screen ${theme} ${theme==='theme-dark'?'dark':''}`}>
       <BubblesBg />
       <header className="p-4 flex items-center justify-between">
-        <div className="font-bold text-xl flex items-center gap-2">
-          <Sparkles className="text-blue-400" size={20}/> Jarvis Portal
+        <div className="font-bold text-xl flex items-center gap-2 jarvis-title">
+          <Sparkles className="text-cyan-300" size={20}/> Jarvis Portal
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-xl border px-2 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md">
-            <label className="text-xs mr-1">Webhook:</label>
-            <button type="button" onClick={()=>setUseTest(false)} className={`px-2 py-1 rounded text-xs ${!useTest?'bg-blue-600 text-white':'hover:bg-slate-200 dark:hover:bg-slate-800'}`}>Prod</button>
-            <button type="button" onClick={()=>setUseTest(true)} className={`px-2 py-1 rounded text-xs ${useTest?'bg-blue-600 text-white':'hover:bg-slate-200 dark:hover:bg-slate-800'}`}>Test</button>
+          <div className="flex items-center gap-1 rounded-xl border px-2 py-2 bg-white/5 backdrop-blur-md border-cyan-200/20">
+            <label className="text-xs mr-1 jarvis-subtle">Webhook:</label>
+            <button type="button" onClick={()=>setUseTest(false)} className={`px-2 py-1 rounded text-xs border ${!useTest?'bg-blue-600 text-white':'border-cyan-200/20 hover:bg-white/10'}`}>Prod</button>
+            <button type="button" onClick={()=>setUseTest(true)} className={`px-2 py-1 rounded text-xs border ${useTest?'bg-blue-600 text-white':'border-cyan-200/20 hover:bg-white/10'}`}>Test</button>
           </div>
           <div className="relative">
-            <select aria-label="Theme" className="appearance-none rounded-xl border bg-white/70 dark:bg-slate-900/60 px-8 py-2 pr-10 backdrop-blur-md"
+            <select aria-label="Theme" className="appearance-none rounded-xl border bg-white/5 px-8 py-2 pr-10 backdrop-blur-md border-cyan-200/20"
               value={theme} onChange={e=>setTheme(e.target.value)}>
               <option value="theme-blue">Blue</option>
               <option value="theme-light">Light</option>
@@ -309,7 +309,7 @@ export default function App() {
             </select>
           </div>
           <button
-            className="rounded-xl border px-3 py-2 flex items-center gap-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md disabled:opacity-50 disabled:cursor-not-allowed"
+            className="jarvis-btn disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={()=> user && setOpen(true)}
             disabled={!user}
             title={user ? '' : 'Sign in to chat'}
@@ -317,7 +317,7 @@ export default function App() {
             <MessageSquare size={18}/> UI Chat
           </button>
           <button
-            className={`rounded-xl px-3 py-2 flex items-center gap-2 backdrop-blur-md ${rec.isRecording?'bg-red-600 text-white':'border bg-white/70 dark:bg-slate-900/60'} disabled:opacity-50 disabled:cursor-not-allowed`}
+            className={`rounded-xl px-3 py-2 flex items-center gap-2 backdrop-blur-md border ${rec.isRecording?'bg-red-600 text-white':'bg-white/5 border-cyan-200/20'} disabled:opacity-50 disabled:cursor-not-allowed`}
             onClick={()=> user && (rec.isRecording ? rec.stop(handleStop) : rec.start())}
             disabled={!user}
             title={user ? '' : 'Sign in to use voice'}
@@ -325,23 +325,23 @@ export default function App() {
             <Mic size={18}/> Voice {rec.isRecording ? `(${rec.level}%)` : ''}
           </button>
           {user ? (
-            <button className="rounded-xl border px-3 py-2 flex items-center gap-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" onClick={async ()=>{ await fetch('/api/auth/signout',{method:'POST'}); nav('/signin') }}>
+            <button className="jarvis-btn" onClick={async ()=>{ await fetch('/api/auth/signout',{method:'POST'}); nav('/signin') }}>
               <LogOut size={18}/> Logout
             </button>
           ) : (
-            <button className="rounded-xl border px-3 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" onClick={()=>nav('/signin')}>Sign in</button>
+            <button className="jarvis-btn" onClick={()=>nav('/signin')}>Sign in</button>
           )}
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto p-4 grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl glass p-6">
-          <h3 className="text-lg font-semibold mb-2">Welcome</h3>
-          <p className="text-slate-600">Use the header to open UI Chat or start a Voice recording. Messages go to your n8n webhook with the exact payload fields required.</p>
+          <h3 className="text-lg font-semibold mb-2 text-cyan-300">Welcome</h3>
+          <p className="jarvis-subtle">Use the header to open UI Chat or start a Voice recording. Messages go to your n8n webhook with the exact payload fields required.</p>
         </div>
         <div className="rounded-2xl glass p-6">
-          <h3 className="text-lg font-semibold mb-2">Live Status</h3>
-          <ul className="text-sm text-slate-700 list-disc ml-5 space-y-1">
+          <h3 className="text-lg font-semibold mb-2 text-cyan-300">Live Status</h3>
+          <ul className="text-sm jarvis-subtle list-disc ml-5 space-y-1">
             <li>Signed in: {user? 'yes' : 'no'}</li>
             <li>User: {user? `${user.email} (${user.role})` : '-'}</li>
             <li>Mic level: {rec.level}%</li>

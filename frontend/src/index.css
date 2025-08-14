@@ -3,25 +3,50 @@
 @tailwind utilities;
 
 :root {
-	--bg-start: #eef4ff;
-	--bg-end: #ffffff;
-	--fg: #0f172a;
+	/* Default (light) fallback */
+	--bg-start: #0c1222;
+	--bg-end: #0b1a36;
+	--fg: #e2e8f0;
+	--jarvis-cyan: #5de8ff;
+	--jarvis-blue: #2e7cff;
+	--jarvis-deep: #091226;
+	--jarvis-surface: rgba(9, 18, 38, 0.6);
+	--jarvis-border: rgba(93, 232, 255, 0.15);
+	--jarvis-glow: 0 0 0 1px rgba(93, 232, 255, 0.25), 0 0 24px rgba(93, 232, 255, 0.18);
 }
 
 .theme-blue {
 	--bg-start: #0c1222;
 	--bg-end: #0b1a36;
 	--fg: #e2e8f0;
+	--jarvis-cyan: #5de8ff;
+	--jarvis-blue: #2e7cff;
+	--jarvis-deep: #091226;
+	--jarvis-surface: rgba(9, 18, 38, 0.6);
+	--jarvis-border: rgba(93, 232, 255, 0.15);
+	--jarvis-glow: 0 0 0 1px rgba(93, 232, 255, 0.25), 0 0 24px rgba(93, 232, 255, 0.18);
 }
 .theme-light {
 	--bg-start: #f5f8ff;
 	--bg-end: #ffffff;
 	--fg: #0f172a;
+	--jarvis-cyan: #1fb6ff;
+	--jarvis-blue: #2563eb;
+	--jarvis-deep: #0b1020;
+	--jarvis-surface: rgba(255, 255, 255, 0.65);
+	--jarvis-border: rgba(37, 99, 235, 0.15);
+	--jarvis-glow: 0 0 0 1px rgba(37, 99, 235, 0.18), 0 0 18px rgba(37, 99, 235, 0.12);
 }
 .theme-dark {
 	--bg-start: #0b1020;
 	--bg-end: #050814;
 	--fg: #e5e7eb;
+	--jarvis-cyan: #5de8ff;
+	--jarvis-blue: #2e7cff;
+	--jarvis-deep: #091226;
+	--jarvis-surface: rgba(9, 18, 38, 0.65);
+	--jarvis-border: rgba(93, 232, 255, 0.15);
+	--jarvis-glow: 0 0 0 1px rgba(93, 232, 255, 0.25), 0 0 24px rgba(93, 232, 255, 0.18);
 }
 
 body {
@@ -29,18 +54,85 @@ body {
 							radial-gradient(800px 600px at 80% 10%, rgba(59,130,246,0.25), transparent 60%),
 							linear-gradient(to bottom right, var(--bg-start), var(--bg-end));
 	color: var(--fg);
+	font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
 }
 
 .glass {
-	@apply bg-white/10 backdrop-blur-md border border-white/10 shadow-lg;
+	/* Elevated translucent panel with neon border/glow */
+	background: var(--jarvis-surface);
+	backdrop-filter: blur(12px);
+	border: 1px solid var(--jarvis-border);
+	box-shadow: var(--jarvis-glow);
+	border-radius: 18px;
 }
 
 .sparkles {
 	position: fixed;
 	inset: 0;
 	pointer-events: none;
-	background-image: radial-gradient(2px 2px at 20% 30%, rgba(255,255,255,0.4), transparent),
-										radial-gradient(2px 2px at 80% 40%, rgba(255,255,255,0.3), transparent),
-										radial-gradient(2px 2px at 40% 70%, rgba(255,255,255,0.25), transparent),
-										radial-gradient(2px 2px at 60% 20%, rgba(255,255,255,0.2), transparent);
+	background-image:
+		radial-gradient(2px 2px at 20% 30%, rgba(93,232,255,0.5), transparent),
+		radial-gradient(2px 2px at 80% 40%, rgba(93,232,255,0.35), transparent),
+		radial-gradient(2px 2px at 40% 70%, rgba(93,232,255,0.25), transparent),
+		radial-gradient(2px 2px at 60% 20%, rgba(93,232,255,0.3), transparent);
+}
+
+/* Jarvis UI atoms */
+.jarvis-title {
+	font-size: 1.5rem;
+	line-height: 2rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	color: var(--jarvis-cyan);
+	text-shadow: 0 0 18px rgba(93, 232, 255, 0.35);
+}
+@media (min-width: 768px) {
+	.jarvis-title { font-size: 1.875rem; line-height: 2.25rem; }
+}
+
+.jarvis-subtle { color: color-mix(in oklab, var(--fg) 70%, transparent); }
+
+.jarvis-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	border-radius: 0.75rem;
+	padding: 0.5rem 0.75rem;
+	transition: background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease;
+	border: 1px solid var(--jarvis-border);
+	background: rgba(255,255,255,0.06);
+	color: var(--fg);
+}
+.jarvis-btn:hover { background: rgba(255,255,255,0.1); }
+.jarvis-btn-primary {
+	color: #fff;
+	background: linear-gradient(180deg, var(--jarvis-blue), #1748c8);
+	box-shadow: 0 6px 24px rgba(37, 99, 235, 0.4), 0 0 0 1px rgba(59,130,246,0.35) inset;
+	border-color: rgba(59,130,246,0.35);
+}
+.jarvis-btn-primary:hover { filter: brightness(1.05); }
+.jarvis-btn:focus-visible,
+.jarvis-input:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 2px rgba(93,232,255,0.35), 0 0 0 4px rgba(93,232,255,0.15);
+	border-color: rgba(93,232,255,0.5);
+}
+
+.jarvis-input {
+	border: 1px solid var(--jarvis-border);
+	border-radius: 0.75rem;
+	padding: 0.5rem 0.75rem;
+	width: 100%;
+	background: rgba(255,255,255,0.06);
+	color: var(--fg);
+}
+
+/* Chat bubbles */
+.jarvis-bubble-user {
+	background: linear-gradient(180deg, #2563eb, #1e40af);
+	color: white;
+}
+.jarvis-bubble-ai {
+	background: rgba(255,255,255,0.06);
+	border: 1px solid var(--jarvis-border);
 }

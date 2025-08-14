@@ -193,7 +193,7 @@ app.post('/api/transcribe', requireAuth, upload.single('file'), async (req: any,
     if (!file || !correlationId) return res.status(400).json({ error: 'missing_fields' })
 
     // Use Whisper or gpt-4o-mini-transcribe
-    const mode = process.env.TRANSCRIBE_MODEL || 'whisper-1'
+    const mode = process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe'
     const transcript = await openai.audio.transcriptions.create({
       file: await toFile(Buffer.from(file.buffer), file.originalname, { type: file.mimetype }),
       model: mode,
@@ -211,16 +211,32 @@ app.post('/api/stt', requireAuth, upload.single('audio'), async (req: any, res) 
   try {
     const file = req.file
     if (!file) return res.status(400).json({ error: 'missing_audio' })
-  const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
-  if (!process.env.OPENAI_API_KEY && !headerKey) return res.status(400).json({ error: 'stt_not_configured' })
-    const model = process.env.TRANSCRIBE_MODEL || process.env.OPENAI_STT_MODEL || 'whisper-1'
-  const oa = headerKey ? new OpenAI({ apiKey: headerKey }) : openai
-  const transcript = await oa.audio.transcriptions.create({
-      file: await toFile(Buffer.from(file.buffer), file.originalname || 'audio.webm', { type: file.mimetype }),
-      model,
-    })
-    const text = (transcript as any).text || ''
-    res.json({ text })
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    if (!process.env.OPENAI_API_KEY && !headerKey) return res.status(400).json({ error: 'stt_not_configured' })
+
+  const preferred = (process.env.TRANSCRIBE_MODEL || process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe').trim()
+    // Provide a resilient fallback order
+    const candidates = Array.from(new Set([
+      preferred,
+      preferred === 'whisper-1' ? 'gpt-4o-mini-transcribe' : 'whisper-1',
+    ]))
+
+    const oa = headerKey ? new OpenAI({ apiKey: headerKey }) : openai
+    const fileInput = await toFile(Buffer.from(file.buffer), file.originalname || 'audio.webm', { type: file.mimetype || 'audio/webm' })
+
+    let lastErr: any = null
+    for (const model of candidates) {
+      try {
+        const transcript = await oa.audio.transcriptions.create({ file: fileInput, model })
+        const text = (transcript as any).text || ''
+        return res.json({ text, model })
+      } catch (e) {
+        lastErr = e
+        // Try next candidate
+      }
+    }
+    const detail = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    res.status(502).json({ error: 'stt_failed', detail, tried: candidates })
   } catch (e) {
     res.status(502).json({ error: 'stt_failed', detail: (e as Error).message })
   }
@@ -290,7 +306,11 @@ app.post('/api/tts', requireAuth, async (req: any, res) => {
     const { text } = req.body || {}
   const headerKey = (req.headers['x-elevenlabs-key'] as string | undefined)?.trim()
   const apiKey = headerKey || process.env.ELEVENLABS_API_KEY
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'
+  // Default voice for project key (overridable by env)
+  const defaultVoice = process.env.ELEVENLABS_VOICE_ID || '7dxS4V4NqL8xqL4PSiMp'
+  // Allow end-users to supply a voice id only when using their own key
+  const userVoiceHeader = (req.headers['x-elevenlabs-voice-id'] as string | undefined)?.trim()
+  const voiceId = headerKey && userVoiceHeader ? userVoiceHeader : defaultVoice
     if (!apiKey) return res.status(400).json({ error: 'tts_not_configured' })
     if (!text) return res.status(400).json({ error: 'missing_text' })
 
@@ -312,6 +332,56 @@ app.post('/api/tts', requireAuth, async (req: any, res) => {
     res.send(buf)
   } catch (e) {
     res.status(500).json({ error: 'tts_failed' })
+  }
+})
+
+// Low-latency streaming TTS via ElevenLabs stream endpoint
+// Plays as it downloads for minimal delay.
+app.get('/api/tts/stream', requireAuth, async (req: any, res) => {
+  try {
+    const text = (req.query.text as string || '').toString()
+    const headerKey = (req.headers['x-elevenlabs-key'] as string | undefined)?.trim()
+    const queryKey = (req.query.key as string | undefined)?.trim()
+    const apiKey = headerKey || queryKey || process.env.ELEVENLABS_API_KEY
+    const defaultVoice = process.env.ELEVENLABS_VOICE_ID || '7dxS4V4NqL8xqL4PSiMp'
+    const userVoice = (req.query.voiceId as string | undefined)?.trim()
+    const voiceId = (queryKey || headerKey) && userVoice ? userVoice : defaultVoice
+    const optimize = (req.query.opt as string | undefined) || '2' // 0..4, lower = lower latency
+    if (!apiKey) return res.status(400).json({ error: 'tts_not_configured' })
+    if (!text) return res.status(400).json({ error: 'missing_text' })
+
+    const controller = new AbortController()
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?optimize_streaming_latency=${encodeURIComponent(optimize)}&output_format=mp3_44100_128`, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg'
+      },
+      body: JSON.stringify({
+        text,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: { stability: 0.5, similarity_boost: 0.7 }
+      }),
+      signal: controller.signal as any
+    })
+    if (!r.ok || !r.body) return res.status(500).json({ error: 'tts_failed' })
+    res.setHeader('Content-Type', 'audio/mpeg')
+    // Hint to enable chunked transfer
+    res.setHeader('Transfer-Encoding', 'chunked')
+    // Pipe ElevenLabs stream directly to client
+    // @ts-ignore - node-fetch body is a readable stream
+    r.body.on('error', () => {
+      try { res.end() } catch {}
+    })
+    req.on('close', () => {
+      try { controller.abort() } catch {}
+      try { res.end() } catch {}
+    })
+    // @ts-ignore
+    r.body.pipe(res)
+  } catch (e) {
+    try { res.status(500).json({ error: 'tts_failed' }) } catch {}
   }
 })
 

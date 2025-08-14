@@ -16,6 +16,10 @@ Webhook integration
 - Workflows can respond immediately (synchronous text) and/or later by POSTing to `/api/jarvis/callback` using the `correlationId`.
 
 Directory layout:
+TTS configuration and overrides
+- Backend uses ElevenLabs with a default project voice (env `ELEVENLABS_VOICE_ID`, default `7dxS4V4NqL8xqL4PSiMp`).
+- Users can set their own ElevenLabs API key and Voice ID in the portal Settings. When present, requests include headers `x-elevenlabs-key` and `x-elevenlabs-voice-id`. The backend only honors a custom voice id when a custom key is provided; otherwise it falls back to the project voice.
+
 - backend/: Node/Express, Prisma schema/seed.
 - frontend/: Vite React app, compiled to static files for Nginx.
 - docker-compose.yml: Orchestration for db/backend/frontend.

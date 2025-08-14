@@ -12,6 +12,8 @@ export type SessionState = {
   sessionId: string
   conversationId: string
   inCall: boolean
+  /** UI mode state machine */
+  mode: 'chat' | 'call' | 'connecting'
   status: 'idle' | 'recording' | 'transcribing' | 'sending' | 'waitingForReply' | 'speaking'
   lastError: any | null
   messages: ChatMessage[]
@@ -22,6 +24,7 @@ export function useSession() {
     sessionId: getOrInit('jarvis_session_id'),
     conversationId: getOrInit('jarvis_conversation_id'),
     inCall: false,
+    mode: 'chat',
     status: 'idle',
     lastError: null,
     messages: [],
@@ -36,6 +39,7 @@ export function useSession() {
     ...state,
     setStatus: (s: SessionState['status']) => set(v => ({ ...v, status: s })),
     setInCall: (b: boolean) => set(v => ({ ...v, inCall: b })),
+  setMode: (m: SessionState['mode']) => set(v => ({ ...v, mode: m })),
     setError: (err: any) => set(v => ({ ...v, lastError: err })),
     clearError: () => set(v => ({ ...v, lastError: null })),
     appendMessage: (m: Omit<ChatMessage, 'id' | 'timestamp'> & { id?: string; timestamp?: string }) => set(v => ({

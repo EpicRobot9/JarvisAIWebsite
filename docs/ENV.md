@@ -8,7 +8,7 @@ Root `.env` variables (used by docker-compose):
 - FRONTEND_ORIGIN=http://localhost:5173
 - OPENAI_API_KEY=
 - ELEVENLABS_API_KEY=
-- ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+- ELEVENLABS_VOICE_ID=7dxS4V4NqL8xqL4PSiMp
 - REQUIRE_ADMIN_APPROVAL=false
 - LOCK_NEW_ACCOUNTS=false
 - ADMIN_EMAILS=
@@ -24,4 +24,4 @@ Backend-only:
 Notes:
 - For production, set strong SESSION_SECRET and use HTTPS terminated at a proxy.
 - Disable SEED_DB after initial bootstrap.
-- Users may override OpenAI/ElevenLabs keys client-side. The frontend will attach headers `x-openai-key` and `x-elevenlabs-key` to STT/TTS requests if present.
+- Users may override OpenAI/ElevenLabs keys client-side. The frontend will attach headers `x-openai-key` and `x-elevenlabs-key` to STT/TTS requests if present. When a custom ElevenLabs key is provided, the frontend will also send `x-elevenlabs-voice-id` if set in Settings; otherwise, the backend uses the default project voice.

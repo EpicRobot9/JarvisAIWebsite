@@ -23,12 +23,12 @@ export default function SignIn() {
   return (
     <div className="min-h-screen grid place-items-center p-4">
       <form onSubmit={submit} className="w-full max-w-sm rounded-2xl glass p-6 space-y-3">
-        <h1 className="text-xl font-semibold">Sign in</h1>
-        <input className="w-full border rounded-xl px-3 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
-        <input className="w-full border rounded-xl px-3 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
+        <h1 className="jarvis-title">Sign in</h1>
+        <input className="jarvis-input" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
+        <input className="jarvis-input" placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
         {error && <div className="text-red-600 text-sm">{error}</div>}
-        <button className="w-full rounded-xl bg-blue-600 hover:bg-blue-500 text-white py-2">Sign in</button>
-        <div className="text-sm text-slate-300 dark:text-slate-400">No account? <Link className="text-blue-300" to="/signup">Sign up</Link></div>
+        <button className="w-full jarvis-btn jarvis-btn-primary justify-center">Sign in</button>
+        <div className="text-sm jarvis-subtle">No account? <Link className="text-cyan-300" to="/signup">Sign up</Link></div>
       </form>
     </div>
   )

@@ -4,6 +4,10 @@
 
 let audioCtx: AudioContext | null = null
 let currentSource: AudioBufferSourceNode | null = null
+let currentMediaEl: HTMLAudioElement | null = null
+let currentMediaNode: MediaElementAudioSourceNode | null = null
+let levelListener: ((level: number)=>void) | null = null
+let rafId: number | null = null
 
 function getCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 })
@@ -84,14 +88,31 @@ export async function playAudioBuffer(arrayBuffer: ArrayBuffer): Promise<void> {
   const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
   await stopAudio()
   const src = ctx.createBufferSource()
+  const analyser = ctx.createAnalyser()
+  analyser.fftSize = 256
+  const data = new Uint8Array(analyser.frequencyBinCount)
   src.buffer = audioBuffer
-  src.connect(ctx.destination)
+  src.connect(analyser)
+  analyser.connect(ctx.destination)
   currentSource = src
   await ctx.resume()
   return new Promise((resolve) => {
     src.onended = () => {
       if (currentSource === src) currentSource = null
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null }
       resolve()
+    }
+    // Visualizer loop
+    if (levelListener) {
+      const tick = () => {
+        analyser.getByteTimeDomainData(data)
+        let sum = 0
+        for (let i=0;i<data.length;i++) { const v = (data[i]-128)/128; sum += v*v }
+        const rms = Math.sqrt(sum / data.length)
+        try { levelListener(Math.min(1, rms * 3)) } catch {}
+        rafId = requestAnimationFrame(tick)
+      }
+      tick()
     }
     src.start(0)
   })
@@ -101,7 +122,73 @@ export async function playAudioBuffer(arrayBuffer: ArrayBuffer): Promise<void> {
 export async function stopAudio(): Promise<void> {
   if (currentSource) {
     try { currentSource.stop() } catch {}
-    currentSource.disconnect()
+    try { currentSource.disconnect() } catch {}
     currentSource = null
   }
+  if (currentMediaEl) {
+    try { currentMediaEl.pause() } catch {}
+    try { currentMediaEl.src = '' } catch {}
+    currentMediaEl = null
+  }
+  if (currentMediaNode) {
+    try { currentMediaNode.disconnect() } catch {}
+    currentMediaNode = null
+  }
+}
+
+/** Allow UI to subscribe to playback level [0..1] for visualization. */
+export function setAudioLevelListener(listener: ((level:number)=>void) | null) {
+  levelListener = listener
+}
+
+/**
+ * Stream and play audio from a URL (e.g., /api/tts/stream?...),
+ * starting playback as soon as data arrives. Uses an HTMLAudioElement
+ * connected to WebAudio for visualization.
+ */
+export async function playStreamUrl(url: string): Promise<void> {
+  const ctx = getCtx()
+  await stopAudio()
+  const audio = new Audio()
+  audio.src = url
+  audio.preload = 'auto'
+  audio.crossOrigin = 'use-credentials'
+  // Connect to analyser for level visualization
+  const analyser = ctx.createAnalyser()
+  analyser.fftSize = 256
+  const data = new Uint8Array(analyser.frequencyBinCount)
+  const node = ctx.createMediaElementSource(audio)
+  node.connect(analyser)
+  analyser.connect(ctx.destination)
+  currentMediaEl = audio
+  currentMediaNode = node
+  await ctx.resume()
+  return new Promise((resolve, reject) => {
+    let started = false
+    audio.addEventListener('ended', () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null }
+      resolve()
+    })
+    audio.addEventListener('error', () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null }
+      reject(new Error('Audio playback error'))
+    })
+    audio.addEventListener('canplay', async () => {
+      if (started) return
+      started = true
+      try { await audio.play() } catch (e) { reject(e) }
+    })
+    // Visualizer loop
+    if (levelListener) {
+      const tick = () => {
+        analyser.getByteTimeDomainData(data)
+        let sum = 0
+        for (let i=0;i<data.length;i++) { const v = (data[i]-128)/128; sum += v*v }
+        const rms = Math.sqrt(sum / data.length)
+        try { levelListener(Math.min(1, rms * 3)) } catch {}
+        rafId = requestAnimationFrame(tick)
+      }
+      tick()
+    }
+  })
 }

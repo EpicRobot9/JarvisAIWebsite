@@ -99,7 +99,8 @@ export async function sendToWebhook(
 export async function transcribeAudio(blob: Blob): Promise<{ text: string }> {
   try {
     const form = new FormData()
-    form.append('audio', blob, 'audio.webm')
+  // Field name must be 'audio' for /api/stt
+  form.append('audio', blob, 'audio.webm')
   const headers: Record<string,string> = {}
   const userOpenAI = localStorage.getItem('user_openai_api_key') || ''
   if (userOpenAI) headers['x-openai-key'] = userOpenAI
@@ -134,7 +135,11 @@ export async function synthesizeTTS(text: string): Promise<ArrayBuffer> {
   try {
   const headers: Record<string,string> = { 'Content-Type': 'application/json' }
   const userEl = localStorage.getItem('user_elevenlabs_api_key') || ''
-  if (userEl) headers['x-elevenlabs-key'] = userEl
+  if (userEl) {
+    headers['x-elevenlabs-key'] = userEl
+    const vid = (localStorage.getItem('user_elevenlabs_voice_id') || '').trim()
+    if (vid) headers['x-elevenlabs-voice-id'] = vid
+  }
   const r = await fetch('/api/tts', { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ text }) })
     if (!r.ok) throw new AppError('tts_failed', `TTS error ${r.status}: ${r.statusText}`, await safeText(r))
     return await r.arrayBuffer()
@@ -146,4 +151,19 @@ export async function synthesizeTTS(text: string): Promise<ArrayBuffer> {
 
 async function safeText(r: Response) {
   try { return await r.text() } catch { return '' }
+}
+
+/** Build a streaming TTS URL for low-latency playback. */
+export function getTtsStreamUrl(text: string): string {
+  const params = new URLSearchParams()
+  params.set('text', text)
+  const userEl = (localStorage.getItem('user_elevenlabs_api_key') || '').trim()
+  if (userEl) {
+    params.set('key', userEl)
+    const vid = (localStorage.getItem('user_elevenlabs_voice_id') || '').trim()
+    if (vid) params.set('voiceId', vid)
+  }
+  // Lower initial chunk latency; 2 is a good balance of quality/latency
+  params.set('opt', '2')
+  return `/api/tts/stream?${params.toString()}`
 }

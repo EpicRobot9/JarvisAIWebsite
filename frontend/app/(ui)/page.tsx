@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import MicToggleButton from '../../src/components/MicToggleButton'
 import SettingsPanel from '../../src/components/SettingsPanel'
 import ErrorToast from '../../src/components/ErrorToast'
 import ErrorCard from '../../src/components/ErrorCard'
-import { AppError, sendToRouter, sendToWebhook, synthesizeTTS, transcribeAudio } from '../../src/lib/api'
-import { playAudioBuffer, stopAudio } from '../../src/lib/audio'
+import { AppError, sendToRouter, sendToWebhook, synthesizeTTS, transcribeAudio, getTtsStreamUrl } from '../../src/lib/api'
+import { playAudioBuffer, stopAudio, playStreamUrl } from '../../src/lib/audio'
 import { useEventChannel } from '../../src/lib/events'
 import { useSession } from '../../src/lib/session'
 import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '../../src/lib/config'
+import { motion, AnimatePresence } from 'framer-motion'
+import CallMode from '../../src/components/CallMode'
 
 type Me = { id: string; email: string; role: string; status: string } | null
 
 export default function Page() {
+  const nav = useNavigate()
   const session = useSession()
   const [me, setMe] = useState<Me>(null)
   const [loadingMe, setLoadingMe] = useState(true)
@@ -79,8 +83,7 @@ export default function Page() {
         // Speak
         session.setStatus('speaking')
         setSpeaking(true)
-        const audio = await synthesizeTTS(immediateText)
-        await playAudioBuffer(audio)
+  await playStreamUrl(getTtsStreamUrl(immediateText))
         setSpeaking(false)
         session.setStatus('idle')
         setRetry(null)
@@ -115,8 +118,7 @@ export default function Page() {
           lastReplyRef.current = resolved
           session.setStatus('speaking')
           setSpeaking(true)
-          const audio = await synthesizeTTS(resolved)
-          await playAudioBuffer(audio)
+          await playStreamUrl(getTtsStreamUrl(resolved))
           setSpeaking(false)
           session.setStatus('idle')
           setRetry(null)
@@ -165,8 +167,7 @@ export default function Page() {
     try {
       session.setStatus('speaking')
       setSpeaking(true)
-      const audio = await synthesizeTTS(text)
-      await playAudioBuffer(audio)
+  await playStreamUrl(getTtsStreamUrl(text))
     } catch (e) {
       const err = AppError.from(e)
       session.setError(err)
@@ -181,12 +182,30 @@ export default function Page() {
   const [input, setInput] = useState('')
   const canUse = useMemo(() => !!me && me.status === 'active', [me])
 
+  async function signOut() {
+    try {
+      await fetch('/api/auth/signout', { method: 'POST', credentials: 'include' })
+      setMe(null)
+      nav('/signin')
+    } catch {}
+  }
+
   return (
-    <div className="min-h-screen grid grid-cols-1 md:grid-cols-[260px_1fr_280px] gap-4 p-4">
+    <div className="h-screen relative p-4">
+      <AnimatePresence initial={false}>
+        {/* Chat shell */}
+    {session.mode !== 'call' && (
+      <motion.div
+            key="chat-shell"
+    className="grid grid-cols-1 md:grid-cols-[260px_1fr_280px] gap-4 h-full"
+            initial={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
+            animate={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
+            exit={{ opacity: 0.4, filter: 'blur(8px)', scale: 0.98, transition: { duration: 0.35, ease: 'easeInOut' } }}
+          >
       {/* Left sidebar */}
-      <aside className="glass rounded-2xl p-4 h-max">
-        <h2 className="font-semibold mb-3">Jarvis</h2>
-        <div className="text-sm text-slate-600 dark:text-slate-300">
+  <aside className="glass rounded-2xl p-4 h-full overflow-y-auto">
+        <h2 className="jarvis-title mb-3">J.A.R.V.I.S.</h2>
+        <div className="text-sm jarvis-subtle">
           <div>Status: <span className="font-medium">{session.status}</span></div>
           <div>Speaking: {speaking ? 'yes' : 'no'}</div>
           <div>In call: {session.inCall ? 'yes' : 'no'}</div>
@@ -194,14 +213,27 @@ export default function Page() {
         <div className="mt-4 space-y-2">
           <MicToggleButton disabled={!canUse || loadingMe} onAudioReady={handleAudio} />
           <button
-            className="w-full border rounded-xl px-3 py-2 bg-white/70 dark:bg-slate-900/60 disabled:opacity-50"
+            className="w-full jarvis-btn jarvis-btn-primary"
+            onClick={()=>{
+              // Save UI context for restore
+              const active = document.activeElement as HTMLElement | null
+              ;(window as any).__jarvis_restore_focus = active && active.focus ? active : null
+              ;(window as any).__jarvis_scroll_y = window.scrollY
+              session.setInCall(true)
+              session.setMode('connecting')
+              setTimeout(()=> session.setMode('call'), 350)
+            }}
+            disabled={!canUse}
+          >Start Call</button>
+          <button
+            className="w-full jarvis-btn disabled:opacity-50"
             onClick={() => input.trim() && (sendText(input.trim(), 'typed'), setInput(''))}
             disabled={!canUse || !input.trim()}
           >Send text</button>
           <div className="flex items-center gap-2 text-xs">
             <span>Webhook:</span>
-            <button className={`px-2 py-1 rounded border ${!useTestWebhook?'bg-blue-600 text-white':''}`} onClick={()=>setUseTestWebhook(false)}>Prod</button>
-            <button className={`px-2 py-1 rounded border ${useTestWebhook?'bg-blue-600 text-white':''}`} onClick={()=>setUseTestWebhook(true)}>Test</button>
+            <button className={`px-2 py-1 rounded border ${!useTestWebhook?'bg-blue-600 text-white':'border-cyan-200/20'}`} onClick={()=>setUseTestWebhook(false)}>Prod</button>
+            <button className={`px-2 py-1 rounded border ${useTestWebhook?'bg-blue-600 text-white':'border-cyan-200/20'}`} onClick={()=>setUseTestWebhook(true)}>Test</button>
           </div>
           {!canUse && <div className="text-xs text-red-500">Sign in and be active to interact.</div>}
           <div className="pt-2 border-t">
@@ -210,31 +242,53 @@ export default function Page() {
         </div>
       </aside>
 
-      {/* Main chat */}
-      <main className="glass rounded-2xl p-4 flex flex-col">
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+  {/* Main chat */}
+  <main className="glass rounded-2xl p-4 h-full flex flex-col overflow-hidden">
+  <div className="flex-1 overflow-y-auto space-y-2 pr-1">
           {session.messages.map(m => (
-            <div key={m.id} className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${m.role==='user'?'bg-blue-600 text-white ml-auto':'bg-slate-100 dark:bg-slate-800'}`}>
+    <div key={m.id} className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${m.role==='user'?'jarvis-bubble-user ml-auto':'jarvis-bubble-ai'}`}>
               {m.text}
             </div>
           ))}
         </div>
         <div className="mt-3 flex gap-2">
           <input
-            className="flex-1 border rounded-xl px-3 py-2 bg-white/70 dark:bg-slate-900/60"
+    className="jarvis-input flex-1"
             placeholder={canUse? 'Type a message…' : 'Sign in to chat'}
             value={input}
             onChange={e=>setInput(e.target.value)}
+            onKeyDown={(e)=>{
+              if ((e as any).isComposing) return
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                const text = input.trim()
+                if (canUse && text) {
+                  sendText(text)
+                  setInput('')
+                }
+              }
+            }}
             disabled={!canUse}
           />
-          <button className="px-4 py-2 rounded-xl bg-blue-600 text-white disabled:opacity-50" disabled={!canUse || !input.trim()} onClick={()=>{ sendText(input.trim()); setInput('') }}>Send</button>
+      <button className="jarvis-btn jarvis-btn-primary disabled:opacity-50" disabled={!canUse || !input.trim()} onClick={()=>{ sendText(input.trim()); setInput('') }}>Send</button>
         </div>
       </main>
 
       {/* Right panel */}
-      <aside className="glass rounded-2xl p-4 h-max space-y-3">
-        <h3 className="font-semibold">Status</h3>
+  <aside className="glass rounded-2xl p-4 h-full space-y-3 overflow-y-auto">
+        <h3 className="text-cyan-300 font-semibold">Status</h3>
         <div className="text-sm">User: {loadingMe ? 'loading…' : (me ? `${me.email} (${me.status})` : 'guest')}</div>
+        {!loadingMe && !me && (
+          <div className="flex gap-2">
+            <Link to="/signin" className="px-3 py-2 rounded-xl border border-cyan-200/20">Sign in</Link>
+            <Link to="/signup" className="px-3 py-2 rounded-xl bg-blue-600 text-white">Sign up</Link>
+          </div>
+        )}
+        {!loadingMe && me && (
+          <div>
+            <button className="px-3 py-2 rounded-xl border border-cyan-200/20" onClick={signOut}>Sign out</button>
+          </div>
+        )}
         {callSummary && (
           <div className="border rounded-lg p-2 text-sm">{callSummary}</div>
         )}
@@ -242,14 +296,40 @@ export default function Page() {
           <ErrorCard title={session.lastError.message} tech={`Kind: ${session.lastError.kind}`} details={String(session.lastError.detail||'')} onRetry={retry?.fn} />
         )}
         {retry && (
-          <button className="px-3 py-2 rounded-xl border" onClick={()=>retry.fn()}>{retry.label}</button>
+          <button className="px-3 py-2 rounded-xl border border-cyan-200/20" onClick={()=>retry.fn()}>{retry.label}</button>
         )}
         <div className="pt-2 border-t text-xs text-slate-500">
           Session: {session.sessionId.slice(0,8)}…
         </div>
       </aside>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-      {toast && <ErrorToast message={toast} onClose={()=>setToast('')} />}
-    </div>
+        {/* Call Mode overlay */}
+        <AnimatePresence>
+          {session.mode === 'call' && (
+            <CallMode
+              key="call-mode"
+              userId={me?.id}
+              sessionId={session.sessionId}
+              useTestWebhook={useTestWebhook}
+              onTranscript={(t)=> session.appendMessage({ role: 'user', text: t, via: 'voice' })}
+              onReply={(t)=> session.appendMessage({ role: 'assistant', text: t, via: 'api' })}
+              onEnd={()=>{
+                session.setInCall(false)
+                session.setMode('chat')
+                // Restore scroll and focus
+                const y = (window as any).__jarvis_scroll_y
+                if (typeof y === 'number') window.scrollTo({ top: y, behavior: 'instant' as any })
+                const el = (window as any).__jarvis_restore_focus as HTMLElement | null
+                try { el?.focus?.() } catch {}
+              }}
+            />
+          )}
+        </AnimatePresence>
+
+        {toast && <ErrorToast message={toast} onClose={()=>setToast('')} />}
+      </div>
   )
 }

@@ -6,7 +6,7 @@ export default function ErrorToast({ message, onClose }: { message: string; onCl
     return () => clearTimeout(t)
   }, [])
   return (
-    <div className="fixed bottom-4 right-4 bg-red-600 text-white px-4 py-3 rounded-lg shadow-lg">
+  <div className="fixed bottom-4 right-4 bg-red-600/90 text-white px-4 py-3 rounded-lg shadow-lg">
       {message}
     </div>
   )

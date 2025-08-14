@@ -111,7 +111,7 @@ function ChatSheet({ open, onClose, user, onDebug }) {
   return (
     <div className={`fixed inset-0 bg-black/40 transition ${open?'opacity-100 pointer-events-auto':'opacity-0 pointer-events-none'}`} onClick={onClose}>
       <div className="absolute right-0 top-0 h-full w-full sm:w-[460px] glass p-4 flex flex-col" onClick={e=>e.stopPropagation()}>
-        <h2 className="text-xl font-semibold mb-2">Chat</h2>
+        <h2 className="jarvis-title mb-2">Chat</h2>
         {error && (
           <div className="mb-2 text-sm text-red-700 bg-red-100 border border-red-300 rounded p-2">
             {error}
@@ -119,7 +119,7 @@ function ChatSheet({ open, onClose, user, onDebug }) {
         )}
         <div className="flex-1 overflow-y-auto space-y-2 pr-1">
           {messages.map((m)=> (
-            <div key={m.id} className={`max-w-[85%] rounded-2xl px-4 py-2 ${m.role==='user'?'bg-blue-600 text-white ml-auto':'bg-slate-100 dark:bg-slate-800'}`}>
+            <div key={m.id} className={`max-w-[85%] rounded-2xl px-4 py-2 ${m.role==='user'?'jarvis-bubble-user ml-auto':'jarvis-bubble-ai'}`}>
               {m.audioUrl ? (
                 <audio controls src={m.audioUrl} className="w-full">
                   Your browser does not support the audio element.
@@ -130,10 +130,10 @@ function ChatSheet({ open, onClose, user, onDebug }) {
                   {m.ack && (
                     <div className="mt-2 flex items-center gap-2 text-xs">
                       {m.error && (
-                        <button onClick={()=>resendFrom(m)} className="px-2 py-1 rounded border bg-white/60 dark:bg-white/10">Resend</button>
+                        <button onClick={()=>resendFrom(m)} className="px-2 py-1 rounded border border-cyan-200/20 bg-white/10">Resend</button>
                       )}
                       {m.origText && (
-                        <button onClick={()=>copyPayloadFrom(m)} className="px-2 py-1 rounded border bg-white/60 dark:bg-white/10">Copy payload</button>
+                        <button onClick={()=>copyPayloadFrom(m)} className="px-2 py-1 rounded border border-cyan-200/20 bg-white/10">Copy payload</button>
                       )}
                     </div>
                   )}
@@ -143,8 +143,8 @@ function ChatSheet({ open, onClose, user, onDebug }) {
           ))}
         </div>
         <form className="mt-2 flex gap-2" onSubmit={e=>{e.preventDefault(); if(input.trim()) { send(input.trim()); setInput('') }}}>
-          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Type a message..." className="flex-1 border rounded-xl px-3 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" />
-          <button className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white">Send</button>
+          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Type a message..." className="jarvis-input flex-1" />
+          <button className="jarvis-btn jarvis-btn-primary">Send</button>
         </form>
       </div>
     </div>
@@ -245,33 +245,33 @@ export default function Dashboard() {
       <BubblesBg />
       <div className="max-w-5xl mx-auto p-6">
         <header className="flex items-center justify-between mb-4">
-          <div className="font-bold text-xl flex items-center gap-2">
-            <Sparkles className="text-blue-400" size={20}/> Jarvis Portal — Dashboard
+          <div className="font-bold text-xl flex items-center gap-2 jarvis-title">
+            <Sparkles className="text-cyan-300" size={20}/> Jarvis Portal — Dashboard
           </div>
           <div className="flex items-center gap-2">
             <div className="relative">
-              <select aria-label="Theme" className="appearance-none rounded-xl border bg-white/70 dark:bg-slate-900/60 px-8 py-2 pr-10 backdrop-blur-md"
+              <select aria-label="Theme" className="appearance-none rounded-xl border bg-white/5 px-8 py-2 pr-10 backdrop-blur-md border-cyan-200/20"
                 value={theme} onChange={e=>setTheme(e.target.value)}>
                 <option value="theme-blue">Blue</option>
                 <option value="theme-light">Light</option>
                 <option value="theme-dark">Dark</option>
               </select>
             </div>
-            <button className={`rounded-xl border px-3 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md ${debugOpen?'ring-2 ring-blue-400':''}`} onClick={()=>setDebugOpen(v=>!v)}>
+            <button className={`jarvis-btn ${debugOpen?'ring-2 ring-blue-400':''}`} onClick={()=>setDebugOpen(v=>!v)}>
               Debug {debugOpen ? 'On' : 'Off'}
             </button>
-            <button className="rounded-xl border px-3 py-2 flex items-center gap-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" onClick={()=>setOpen(true)}>
+            <button className="jarvis-btn flex items-center gap-2" onClick={()=>setOpen(true)}>
               <MessageSquare size={18}/> UI Chat
             </button>
-            <button className={`rounded-xl px-3 py-2 flex items-center gap-2 backdrop-blur-md ${rec.isRecording?'bg-red-600 text-white':'border bg-white/70 dark:bg-slate-900/60'}`} onClick={()=> rec.isRecording ? rec.stop(onVoiceStop) : rec.start()}>
+            <button className={`rounded-xl px-3 py-2 flex items-center gap-2 backdrop-blur-md border ${rec.isRecording?'bg-red-600 text-white':'bg-white/5 border-cyan-200/20'}`} onClick={()=> rec.isRecording ? rec.stop(onVoiceStop) : rec.start()}>
               <Mic size={18}/> Voice {rec.isRecording ? `(${rec.level}%)` : ''}
             </button>
             {me ? (
-              <button className="rounded-xl border px-3 py-2 flex items-center gap-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" onClick={async ()=>{ await fetch('/api/auth/signout',{method:'POST'}); nav('/signin') }}>
+              <button className="jarvis-btn flex items-center gap-2" onClick={async ()=>{ await fetch('/api/auth/signout',{method:'POST'}); nav('/signin') }}>
                 Logout
               </button>
             ) : (
-              <button className="rounded-xl border px-3 py-2 bg-white/70 dark:bg-slate-900/60 backdrop-blur-md" onClick={()=>nav('/signin')}>Sign in</button>
+              <button className="jarvis-btn" onClick={()=>nav('/signin')}>Sign in</button>
             )}
           </div>
         </header>
@@ -287,11 +287,11 @@ export default function Dashboard() {
           )}
           <div className="rounded-2xl glass p-6">
             <h3 className="text-lg font-semibold mb-2">Welcome</h3>
-            <p className="text-slate-600">Use the header to open UI Chat or start a Voice recording. Messages go to your n8n webhook with the exact payload fields required.</p>
+            <p className="jarvis-subtle">Use the header to open UI Chat or start a Voice recording. Messages go to your n8n webhook with the exact payload fields required.</p>
           </div>
           <div className="rounded-2xl glass p-6">
-            <h3 className="text-lg font-semibold mb-2">Live Status</h3>
-            <ul className="text-sm text-slate-700 list-disc ml-5 space-y-1">
+            <h3 className="text-lg font-semibold mb-2 text-cyan-300">Live Status</h3>
+            <ul className="text-sm jarvis-subtle list-disc ml-5 space-y-1">
               <li>Signed in: {me? 'yes' : (loading ? 'checking…' : 'no')}</li>
               <li>User: {me? `${me.email} (${me.role})` : '-'}</li>
               <li>Mic level: {rec.level}%</li>
@@ -332,7 +332,7 @@ export default function Dashboard() {
                     {e.payload ? (
                       <>
                         <pre className="mt-1 bg-black/5 dark:bg-white/5 rounded p-2 whitespace-pre-wrap">{JSON.stringify(e.payload, null, 2)}</pre>
-                        <button className="mt-1 px-2 py-1 rounded border text-xs" onClick={async ()=>{
+                        <button className="mt-1 px-2 py-1 rounded border text-xs border-cyan-200/20" onClick={async ()=>{
                           try { await navigator.clipboard?.writeText?.(JSON.stringify(e.payload, null, 2)) } catch {}
                         }}>Copy payload</button>
                       </>
