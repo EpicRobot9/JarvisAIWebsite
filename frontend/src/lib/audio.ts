@@ -1,0 +1,107 @@
+/**
+ * Audio utilities for encoding and playback.
+ */
+
+let audioCtx: AudioContext | null = null
+let currentSource: AudioBufferSourceNode | null = null
+
+function getCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 })
+  return audioCtx
+}
+
+/**
+ * Convert an audio Blob (webm/opus) to a 16-bit PCM WAV ArrayBuffer.
+ * Uses WebAudio to decode and re-encode.
+ */
+export async function blobToWav(blob: Blob): Promise<ArrayBuffer> {
+  const ctx = getCtx()
+  const arr = await blob.arrayBuffer()
+  const audioBuf = await ctx.decodeAudioData(arr.slice(0))
+  const numChannels = Math.min(2, audioBuf.numberOfChannels)
+  const sampleRate = 48000
+  // Resample to 48k using OfflineAudioContext
+  const offline = new OfflineAudioContext(numChannels, Math.ceil(audioBuf.duration * sampleRate), sampleRate)
+  const src = offline.createBufferSource()
+  src.buffer = audioBuf
+  src.connect(offline.destination)
+  src.start()
+  const rendered = await offline.startRendering()
+  const wav = encodeWAV(rendered, numChannels, sampleRate)
+  return wav
+}
+
+function encodeWAV(buffer: AudioBuffer, channels: number, sampleRate: number): ArrayBuffer {
+  const frames = buffer.length
+  const bytesPerSample = 2
+  const blockAlign = channels * bytesPerSample
+  const byteRate = sampleRate * blockAlign
+  const dataSize = frames * blockAlign
+  const headerSize = 44
+  const totalSize = headerSize + dataSize
+  const out = new ArrayBuffer(totalSize)
+  const view = new DataView(out)
+
+  // RIFF header
+  writeString(view, 0, 'RIFF')
+  view.setUint32(4, 36 + dataSize, true)
+  writeString(view, 8, 'WAVE')
+  writeString(view, 12, 'fmt ')
+  view.setUint32(16, 16, true) // PCM
+  view.setUint16(20, 1, true) // audio format PCM
+  view.setUint16(22, channels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, byteRate, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, 16, true) // bits per sample
+  writeString(view, 36, 'data')
+  view.setUint32(40, dataSize, true)
+
+  // PCM data interleaved by channel
+  let offset = 44
+  const tmp = new Float32Array(buffer.length)
+  for (let ch = 0; ch < channels; ch++) {
+    buffer.copyFromChannel(tmp, ch)
+    for (let i = 0; i < tmp.length; i++) {
+      const sample = Math.max(-1, Math.min(1, tmp[i]))
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true)
+      offset += 2
+    }
+  }
+
+  return out
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i))
+}
+
+/**
+ * Decode and play an audio ArrayBuffer via WebAudio. Returns a promise that resolves when playback stops.
+ */
+export async function playAudioBuffer(arrayBuffer: ArrayBuffer): Promise<void> {
+  const ctx = getCtx()
+  const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+  await stopAudio()
+  const src = ctx.createBufferSource()
+  src.buffer = audioBuffer
+  src.connect(ctx.destination)
+  currentSource = src
+  await ctx.resume()
+  return new Promise((resolve) => {
+    src.onended = () => {
+      if (currentSource === src) currentSource = null
+      resolve()
+    }
+    src.start(0)
+  })
+}
+
+/** Stop any currently playing audio gracefully. */
+export async function stopAudio(): Promise<void> {
+  if (currentSource) {
+    try { currentSource.stop() } catch {}
+    currentSource.disconnect()
+    currentSource = null
+  }
+}

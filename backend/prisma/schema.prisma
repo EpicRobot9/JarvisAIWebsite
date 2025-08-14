@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  role         String     @default("user") // 'user' | 'admin'
+  status       String     @default("active") // 'active' | 'pending' | 'denied'
+  createdAt    DateTime   @default(now())
+  sessions     Session[]
+  approvals    Approval[] @relation("UserApprovals")
+  decided      Approval[] @relation("DecidedBy")
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+}
+
+model Approval {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation("UserApprovals", fields: [userId], references: [id])
+  status      String    @default("pending") // 'pending' | 'approved' | 'denied'
+  decidedById String?
+  decidedBy   User?     @relation("DecidedBy", fields: [decidedById], references: [id])
+  decidedAt   DateTime?
+  createdAt   DateTime  @default(now())
+}

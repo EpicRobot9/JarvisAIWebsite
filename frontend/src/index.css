@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+	--bg-start: #eef4ff;
+	--bg-end: #ffffff;
+	--fg: #0f172a;
+}
+
+.theme-blue {
+	--bg-start: #0c1222;
+	--bg-end: #0b1a36;
+	--fg: #e2e8f0;
+}
+.theme-light {
+	--bg-start: #f5f8ff;
+	--bg-end: #ffffff;
+	--fg: #0f172a;
+}
+.theme-dark {
+	--bg-start: #0b1020;
+	--bg-end: #050814;
+	--fg: #e5e7eb;
+}
+
+body {
+	background: radial-gradient(1200px 800px at 20% -10%, var(--bg-start), transparent 60%),
+							radial-gradient(800px 600px at 80% 10%, rgba(59,130,246,0.25), transparent 60%),
+							linear-gradient(to bottom right, var(--bg-start), var(--bg-end));
+	color: var(--fg);
+}
+
+.glass {
+	@apply bg-white/10 backdrop-blur-md border border-white/10 shadow-lg;
+}
+
+.sparkles {
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	background-image: radial-gradient(2px 2px at 20% 30%, rgba(255,255,255,0.4), transparent),
+										radial-gradient(2px 2px at 80% 40%, rgba(255,255,255,0.3), transparent),
+										radial-gradient(2px 2px at 40% 70%, rgba(255,255,255,0.25), transparent),
+										radial-gradient(2px 2px at 60% 20%, rgba(255,255,255,0.2), transparent);
+}
