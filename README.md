@@ -8,6 +8,8 @@ Highlights
 - Callback polling via `/api/jarvis/callback/:id` with automatic retries and timeout.
 - Optional per‑user API key overrides for OpenAI and ElevenLabs from the Settings panel.
 	- ElevenLabs default voice is now `7dxS4V4NqL8xqL4PSiMp`. Users with their own ElevenLabs key can set a custom Voice ID in Settings and switch back anytime.
+ - Token‑secured per‑user pushes from external systems (like n8n) to speak in the active session: `POST /api/integration/push-to-user` with `Authorization: Bearer <INTEGRATION_PUSH_TOKEN>`.
+ - In call mode, the UI uses streaming TTS for low latency and queues messages; if streaming fails, it falls back to buffered TTS automatically.
 
 ## Quick start
 
@@ -34,7 +36,7 @@ Verify the webhook wiring
 	- Test: `https://n8n.srv955268.hstgr.cloud/webhook-test/n8n`
 - The app then polls `GET /api/jarvis/callback/:correlationId` until your workflow posts a result to `POST /api/jarvis/callback`.
 
-See also: `docs/N8N.md` for detailed n8n HTTP Request node examples (push/push-voice/call-end and callback).
+See also: `docs/N8N.md` for detailed n8n HTTP Request node examples (push/push-voice/call-end and callback). During calls, you should see two TTS requests when sending a voice push alongside the webhook reply (one for each message).
 
 ## Accounts
 
@@ -97,3 +99,4 @@ The frontend dev server proxies `/api` to `http://localhost:8080`.
 - Transcription errors: Set `OPENAI_API_KEY` and verify model name via `TRANSCRIBE_MODEL` env (default whisper-1).
 - TTS 500: Add `ELEVENLABS_API_KEY` and verify voice ID.
 - Webhook errors: Confirm the toggle target, your n8n URL, and that your flow responds synchronously (optional) and/or calls back to `/api/jarvis/callback` with the `correlationId` provided in the webhook payload.
+ - Voice push shows but doesn’t speak: ensure the user is in Call mode; check Network for `/api/tts/stream` followed by a `/api/tts` fallback if needed. Verify `INTEGRATION_PUSH_TOKEN` header when pushing via `/api/integration/push-to-user`.

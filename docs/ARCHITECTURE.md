@@ -10,6 +10,13 @@ Key flows:
 - Voice: browser records webm -> POST /api/transcribe -> post text to n8n webhook (Prod/Test selectable) -> poll /api/jarvis/callback/:id -> optional TTS.
 - Text: post text directly to n8n webhook (Prod/Test selectable). If webhook replies immediately, show it; otherwise poll callback.
 
+Event delivery
+- Each browser session opens a WS/SSE channel `/api/events?sessionId=...&userId=...` bound to the signed‑in user. Backend can publish to a specific session or broadcast to all sessions for a user (`publishToUser`).
+
+Call‑mode speech
+- In call mode, the UI speaks via low‑latency streaming TTS (`/api/tts/stream`) and queues multiple messages sequentially. If streaming fails, it falls back to `/api/tts` with buffered playback.
+- The UI auto‑unmutes at call start and restores the prior mute state when the call ends.
+
 Webhook integration
 - Frontend decides target URL based on a persisted toggle; defaults can be set via `VITE_WEBHOOK_URL` and `VITE_WEBHOOK_TEST_URL`.
 - Every webhook POST includes: `{ chatInput, userid, correlationId, callbackUrl, source }`.

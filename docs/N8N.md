@@ -127,6 +127,8 @@ Notes
 - sessionId is included in the initial webhook payload from the UI; store it in your workflow context and reuse it for pushes.
 - If your n8n instance sits outside docker, call the externally reachable base URL for the backend (e.g. `https://your.app/api/...`).
 - The UI supports immediate replies plus later callbacks; providing both will show the immediate text then replace/append with the callback result when it arrives.
+ - Voice push behavior: when the UI receives a voice push during a call, it performs a low‑latency streaming TTS request and plays it in sequence. If streaming fails, it falls back to non‑streaming TTS automatically.
+ - Expect two TTS streams during an active call when you also stream your webhook reply: one for your reply, one for any `push-voice` you emit.
 
 ## D) Push by user (no sessionId required; token-secured)
 If your workflow doesn’t keep a sessionId, you can target a user by `userId` or `email` using a shared token configured in the app.
@@ -174,3 +176,10 @@ Notes
 - `voice: true` tells the UI to speak the message.
 - For text pushes, `say: true` will also speak the message.
 - Optional `role: "system"` will render as a system message; default is `assistant`.
+ - Targeting: provide either `userId` or `email`. The app routes pushes to all active sessions for that user; the UI subscribes with its userId to ensure delivery.
+ - During calls, voice pushes are streamed and played immediately, regardless of the UI’s chat mute toggle; after the call ends, the previous mute state is restored.
+
+### Troubleshooting
+- 401 invalid_token from `/api/integration/push-to-user`: ensure your `Authorization: Bearer <token>` matches `INTEGRATION_PUSH_TOKEN` (comma‑separated tokens allowed). Alternatively pass `x-api-token: <token>` or `?token=<token>`.
+- Push appears in chat but no audio: confirm the user is in Call mode. In Network, you should see `/api/tts/stream` for the voice push; if it fails, a subsequent `/api/tts` fallback should appear.
+- No push reaches the UI: make sure you target by the correct `userId`/`email` and that the user is signed in so the event channel is bound to their ID.
