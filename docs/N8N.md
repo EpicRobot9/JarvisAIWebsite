@@ -15,7 +15,8 @@ The frontend webhook payload includes:
   "correlationId": "<uuid>",     // use this when calling the callback endpoint
   "callbackUrl": "/api/jarvis/callback",
   "source": "jarvis-portal",
-  "sessionId": "<web-session-id>" // use this to push events to the active UI
+  "sessionId": "<web-session-id>", // use this to push events to the active UI
+  "messageType": "TextMessage"      // "TextMessage" from chat UI, "CallMessage" for voice/call flows
 }
 ```
 

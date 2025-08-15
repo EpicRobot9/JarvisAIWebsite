@@ -102,6 +102,7 @@ export default function Page() {
         callbackUrl: CALLBACK_URL,
         source: SOURCE_NAME,
         sessionId: session.sessionId,
+        messageType: source === 'typed' ? 'TextMessage' : 'CallMessage',
       })
 
       if (immediateText && immediateText.trim()) {

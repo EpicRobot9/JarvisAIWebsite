@@ -48,9 +48,10 @@ export function useEventChannel(sessionId: string, opts: {
           try { opts.setSpeaking(true); await opts.onSpeak(ev.text) } finally { opts.setSpeaking(false) }
         }
       } else if (ev.type === 'push-voice') {
-        if (opts.onSpeak) {
-          try { opts.setSpeaking(true); await opts.onSpeak(ev.text) } finally { opts.setSpeaking(false) }
-        }
+  // Also show in the chat as an assistant message and speak it
+  const asPush = { type: 'push' as const, text: ev.text, role: 'assistant' as const, say: true }
+  opts.onPush(asPush)
+  // onSpeak will be triggered by the 'say' flag in the push handler
       } else if (ev.type === 'call-end') {
         opts.onCallEnd(ev)
       }

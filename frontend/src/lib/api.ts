@@ -33,7 +33,7 @@ export class AppError extends Error {
  */
 export async function sendToWebhook(
   text: string,
-  opts: { userId: string; webhookUrl: string; callbackUrl: string; source: string; sessionId?: string }
+  opts: { userId: string; webhookUrl: string; callbackUrl: string; source: string; sessionId?: string; messageType?: 'TextMessage' | 'CallMessage' }
 ): Promise<{ correlationId: string; immediateText?: string }> {
   const correlationId = crypto.randomUUID()
   let res: Response
@@ -51,7 +51,8 @@ export async function sendToWebhook(
         correlationId,
         callbackUrl: opts.callbackUrl,
         source: opts.source,
-        sessionId: opts.sessionId
+  sessionId: opts.sessionId,
+  messageType: opts.messageType || 'TextMessage'
       })
     })
   } catch (e) {

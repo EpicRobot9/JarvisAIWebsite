@@ -83,7 +83,8 @@ function ChatSheet({ open, onClose, webhookUrl }) {
         userid: user?.id || 'anon',
         correlationId,
         callbackUrl: CALLBACK_URL,
-        source: SOURCE_NAME
+        source: SOURCE_NAME,
+        messageType: 'TextMessage'
       })
     })
     } catch (e) {
@@ -280,7 +281,7 @@ export default function App() {
       await fetch(currentWebhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': localStorage.getItem('jarvis_apikey') || '' },
-        body: JSON.stringify({ chatInput: text, userid: user?.id || 'anon', correlationId, callbackUrl: CALLBACK_URL, source: SOURCE_NAME })
+        body: JSON.stringify({ chatInput: text, userid: user?.id || 'anon', correlationId, callbackUrl: CALLBACK_URL, source: SOURCE_NAME, messageType: 'CallMessage' })
       })
     }
   }

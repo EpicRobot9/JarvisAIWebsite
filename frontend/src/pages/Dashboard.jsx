@@ -27,7 +27,8 @@ function ChatSheet({ open, onClose, user, onDebug }) {
         userid: user?.id || 'anon',
         correlationId,
         callbackUrl: CALLBACK_URL,
-        source: SOURCE_NAME
+        source: SOURCE_NAME,
+        messageType: 'TextMessage'
       })
     })
     if (res.ok) {
@@ -364,10 +365,10 @@ async function onVoiceStop(blob) {
   if (r.ok) {
     const { text } = await r.json()
     emit({ kind: 'voice:transcribe:response', at: Date.now(), correlationId, payload: { text } })
-    const res = await fetch(WEBHOOK_URL, {
+  const res = await fetch(WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': localStorage.getItem('jarvis_apikey') || '' },
-      body: JSON.stringify({ chatInput: text, userid: 'voice', correlationId, callbackUrl: CALLBACK_URL, source: SOURCE_NAME })
+  body: JSON.stringify({ chatInput: text, userid: 'voice', correlationId, callbackUrl: CALLBACK_URL, source: SOURCE_NAME, messageType: 'CallMessage' })
     })
     emit({ kind: 'voice:webhook:ack', at: Date.now(), correlationId, status: res.status })
   } else {

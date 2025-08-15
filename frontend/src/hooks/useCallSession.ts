@@ -59,7 +59,8 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
         webhookUrl: currentWebhookUrl,
         callbackUrl: CALLBACK_URL,
         source: SOURCE_NAME,
-        sessionId: opts.sessionId
+  sessionId: opts.sessionId,
+  messageType: 'CallMessage'
       })
       let reply = immediateText || ''
       if (!reply) {

@@ -29,7 +29,9 @@ Frontend → n8n webhook (direct)
 		"userid": "user-id-or-anon",
 		"correlationId": "uuid-v4",
 		"callbackUrl": "/api/jarvis/callback",
-		"source": "jarvis-portal"
+		"source": "jarvis-portal",
+		"sessionId": "<web-session-id>",
+		"messageType": "TextMessage" // or "CallMessage" when sent from voice/call flow
 	}
 	```
 - The workflow may:
