@@ -4,8 +4,8 @@ import MicToggleButton from '../../src/components/MicToggleButton'
 import SettingsPanel from '../../src/components/SettingsPanel'
 import ErrorToast from '../../src/components/ErrorToast'
 import ErrorCard from '../../src/components/ErrorCard'
-import { AppError, sendToRouter, sendToWebhook, synthesizeTTS, transcribeAudio } from '../../src/lib/api'
-import { stopAudio, cacheTts, hasCachedTts, playCachedTts, isPlayingMessage, playAudioBufferForMessage } from '../../src/lib/audio'
+import { AppError, sendToRouter, sendToWebhook, synthesizeTTS, transcribeAudio, getTtsStreamUrl } from '../../src/lib/api'
+import { stopAudio, cacheTts, hasCachedTts, playCachedTts, isPlayingMessage, playAudioBufferForMessage, enqueueStreamUrl, enqueueAudioBuffer, setOnQueueIdleListener } from '../../src/lib/audio'
 import { useEventChannel } from '../../src/lib/events'
 import { useSession } from '../../src/lib/session'
 import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '../../src/lib/config'
@@ -42,14 +42,16 @@ export default function Page() {
       try {
         const r = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
         const t = await r.text()
-        setMe(t ? JSON.parse(t) : null)
+  const m = t ? JSON.parse(t) : null
+  setMe(m)
+  ;(window as any).__jarvis_user_id = m?.id
       } catch { setMe(null) }
       finally { setLoadingMe(false) }
     })()
   }, [])
 
   // Event channel: push/push-voice/call-end with delegated speaking
-  useEventChannel(session.sessionId, {
+  useEventChannel(session.sessionId, me?.id, {
     onPush: async (ev) => {
       const id = crypto.randomUUID()
       session.appendMessage({ id, role: ev.role || 'assistant', text: ev.text, via: 'api' })
@@ -60,17 +62,45 @@ export default function Page() {
       session.setInCall(false)
       setSpeaking(false)
       stopAudio()
+      // Restore previous mute state if we auto-unmuted for call
+      try {
+        const prev = (window as any).__jarvis_prev_muted
+        if (typeof prev === 'boolean') {
+          session.setMuted(prev)
+          ;(window as any).__jarvis_prev_muted = undefined
+        }
+      } catch {}
     },
     setSpeaking,
-    onSpeak: async (text: string) => {
-      if (session.muted) return
+  onSpeak: async (text: string, o?: { forceStream?: boolean }) => {
+      // In call mode, always speak (ignore muted race at call start). In chat mode, honor mute.
+      if (session.mode !== 'call' && !o?.forceStream && session.muted) return
+      // During calls, queue via streaming TTS to keep order and avoid interruptions
+      if (session.mode === 'call' || o?.forceStream) {
+        session.setStatus('speaking')
+        setSpeaking(true)
+        setOnQueueIdleListener(() => { setSpeaking(false); session.setStatus('idle') })
+        try {
+          await enqueueStreamUrl(getTtsStreamUrl(text))
+        } catch (e) {
+          // Fallback to non-streaming TTS if streaming fails (still queued)
+          try {
+            const buf = await synthesizeTTS(text)
+            await enqueueAudioBuffer(buf)
+          } catch (e2) {
+            const err = AppError.from(e2)
+            session.setError(err)
+            setToast(err.message)
+          }
+        }
+        return
+      }
+      // Non-call behavior: synthesize and play (cached)
       try {
         session.setStatus('speaking')
         setSpeaking(true)
         await stopAudio() // interrupt any current
-        // Cache and play for the most recent assistant message id
         const mid = lastAssistantIdRef.current || crypto.randomUUID()
-        // Synthesize and cache if needed
         if (!hasCachedTts(mid)) {
           const buf = await synthesizeTTS(text)
           cacheTts(mid, buf)
@@ -269,6 +299,9 @@ export default function Page() {
               const active = document.activeElement as HTMLElement | null
               ;(window as any).__jarvis_restore_focus = active && active.focus ? active : null
               ;(window as any).__jarvis_scroll_y = window.scrollY
+              // Auto-unmute for call and remember previous state
+              try { (window as any).__jarvis_prev_muted = session.muted } catch {}
+              session.setMuted(false)
               session.setInCall(true)
               session.setMode('connecting')
               setTimeout(()=> session.setMode('call'), 350)
@@ -431,6 +464,14 @@ export default function Page() {
               onEnd={()=>{
                 session.setInCall(false)
                 session.setMode('chat')
+                // Restore mute state after user-ended call
+                try {
+                  const prev = (window as any).__jarvis_prev_muted
+                  if (typeof prev === 'boolean') {
+                    session.setMuted(prev)
+                    ;(window as any).__jarvis_prev_muted = undefined
+                  }
+                } catch {}
                 // Restore scroll and focus
                 const y = (window as any).__jarvis_scroll_y
                 if (typeof y === 'number') window.scrollTo({ top: y, behavior: 'instant' as any })

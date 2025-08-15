@@ -11,6 +11,61 @@ let rafId: number | null = null
 let currentMessageId: string | null = null
 const ttsCache = new Map<string, ArrayBuffer>()
 
+// --- Simple playback queue for sequential TTS/streams ---
+type QueueTask = () => Promise<void>
+// Internal queue stores wrappers that handle resolve/reject per task
+const playbackQueue: Array<() => Promise<void>> = []
+let processingQueue = false
+let onQueueIdle: (() => void) | null = null
+
+async function runQueue() {
+  if (processingQueue) return
+  processingQueue = true
+  try {
+    while (playbackQueue.length > 0) {
+      const task = playbackQueue.shift()!
+      // Wrapper already handles resolve/reject; do not rethrow here
+      try { await task() } catch { /* noop: wrapper rejected to caller */ }
+    }
+  } finally {
+    processingQueue = false
+    // When nothing queued and nothing playing, notify idle
+    if (playbackQueue.length === 0 && !isAudioActive()) {
+      try { onQueueIdle?.() } catch {}
+    }
+  }
+}
+
+export function enqueuePlayback(task: QueueTask): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    // Wrap the task: propagate success/failure to this promise
+    const wrapper = async () => {
+      try {
+        await task()
+        resolve()
+      } catch (e) {
+        try { reject(e as any) } catch {}
+      }
+    }
+    playbackQueue.push(wrapper)
+    // kick runner
+    void runQueue()
+  })
+}
+
+export function enqueueStreamUrl(url: string): Promise<void> {
+  return enqueuePlayback(async () => { await playStreamUrl(url) })
+}
+export function enqueueAudioBuffer(buf: ArrayBuffer): Promise<void> {
+  return enqueuePlayback(async () => { await playAudioBuffer(buf) })
+}
+export function clearPlaybackQueue() {
+  playbackQueue.splice(0, playbackQueue.length)
+}
+export function getPlaybackQueueLength(): number { return playbackQueue.length }
+export function setOnQueueIdleListener(fn: (()=>void) | null) { onQueueIdle = fn }
+export function isAudioActive(): boolean { return !!currentSource || !!currentMediaEl }
+
 function getCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 })
   return audioCtx
@@ -103,6 +158,10 @@ export async function playAudioBuffer(arrayBuffer: ArrayBuffer): Promise<void> {
       if (currentSource === src) currentSource = null
   currentMessageId = null
       if (rafId) { cancelAnimationFrame(rafId); rafId = null }
+      // If queue has more, runner will pick next; otherwise notify idle
+      if (!processingQueue && getPlaybackQueueLength() === 0) {
+        try { onQueueIdle?.() } catch {}
+      }
       resolve()
     }
     // Visualizer loop
@@ -172,6 +231,9 @@ export async function playStreamUrl(url: string): Promise<void> {
     audio.addEventListener('ended', () => {
       if (rafId) { cancelAnimationFrame(rafId); rafId = null }
   currentMessageId = null
+      if (!processingQueue && getPlaybackQueueLength() === 0) {
+        try { onQueueIdle?.() } catch {}
+      }
       resolve()
     })
     audio.addEventListener('error', () => {

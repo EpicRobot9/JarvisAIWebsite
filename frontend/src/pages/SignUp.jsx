@@ -16,8 +16,12 @@ export default function SignUp() {
       body: JSON.stringify({ email, password })
     })
     if (r.ok) {
-      setNotice('Signed up. If approval required, wait for admin approval. You can sign in once active.')
-      setTimeout(()=> nav('/signin'), 1000)
+      // Save creds in sessionStorage for auto-polling sign-in
+      try {
+        sessionStorage.setItem('jarvis_pending_email', email)
+        sessionStorage.setItem('jarvis_pending_pw', password)
+      } catch {}
+      nav('/awaiting')
     } else {
       setNotice('Sign up blocked or already exists.')
     }

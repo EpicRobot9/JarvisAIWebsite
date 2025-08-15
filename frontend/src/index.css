@@ -55,6 +55,12 @@ body {
 							linear-gradient(to bottom right, var(--bg-start), var(--bg-end));
 	color: var(--fg);
 	font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+	/* Prevent gradient layers from tiling (which caused visible repeating bands) */
+	background-repeat: no-repeat;
+	/* Keep the background stationary for a cleaner look while scrolling */
+	background-attachment: fixed;
+	/* Ensure layers cover the viewport nicely */
+	background-size: cover, cover, cover;
 }
 
 .glass {

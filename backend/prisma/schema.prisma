@@ -17,6 +17,7 @@ model User {
   sessions     Session[]
   approvals    Approval[] @relation("UserApprovals")
   decided      Approval[] @relation("DecidedBy")
+  logs         ApiLog[]
 }
 
 model Session {
@@ -38,4 +39,42 @@ model Approval {
   decidedBy   User?     @relation("DecidedBy", fields: [decidedById], references: [id])
   decidedAt   DateTime?
   createdAt   DateTime  @default(now())
+}
+
+/// Simple key-value settings store for global flags
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// HTTP API request/response and error logs for admin observability
+model ApiLog {
+  id           String   @id @default(cuid())
+  ts           DateTime @default(now())
+
+  // Request context
+  method       String
+  path         String
+  status       Int
+  ok           Boolean
+  durationMs   Int?
+  ip           String?
+  userAgent    String?
+
+  // Associations
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id])
+
+  // Payload previews (sanitized, truncated)
+  requestBody  String?
+  responseBody String?
+
+  // Error details if any
+  errorMessage String?
+  errorStack   String?
+
+  @@index([ts])
+  @@index([path])
+  @@index([status])
 }

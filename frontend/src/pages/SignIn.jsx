@@ -16,8 +16,22 @@ export default function SignIn() {
       credentials: 'include',
       body: JSON.stringify({ email, password })
     })
-  if (r.ok) nav('/')
-    else setError('Invalid credentials or not approved.')
+    if (r.ok) {
+      nav('/')
+    } else if (r.status === 403) {
+      let err = ''
+      try { const t = await r.text(); err = t ? (JSON.parse(t).error || '') : '' } catch {}
+      if (err === 'pending') {
+        try { sessionStorage.setItem('jarvis_pending_email', email); sessionStorage.setItem('jarvis_pending_pw', password) } catch {}
+        nav('/awaiting')
+      } else if (err === 'denied') {
+        setError('Your request was denied. Contact an administrator.')
+      } else {
+        setError('Not approved yet. Please wait for admin approval.')
+      }
+    } else {
+      setError('Invalid credentials or not approved.')
+    }
   }
 
   return (

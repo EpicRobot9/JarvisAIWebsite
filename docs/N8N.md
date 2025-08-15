@@ -127,3 +127,50 @@ Notes
 - sessionId is included in the initial webhook payload from the UI; store it in your workflow context and reuse it for pushes.
 - If your n8n instance sits outside docker, call the externally reachable base URL for the backend (e.g. `https://your.app/api/...`).
 - The UI supports immediate replies plus later callbacks; providing both will show the immediate text then replace/append with the callback result when it arrives.
+
+## D) Push by user (no sessionId required; token-secured)
+If your workflow doesn’t keep a sessionId, you can target a user by `userId` or `email` using a shared token configured in the app.
+
+1) Configure the backend
+- Set `INTEGRATION_PUSH_TOKEN` in environment (comma-separated for multiple). Example:
+  - `INTEGRATION_PUSH_TOKEN=prod-xyz-123,staging-abc-789`
+
+2) Use this HTTP Request node in n8n
+- Method: `POST`
+- URL: `http://backend:8080/api/integration/push-to-user` (inside compose) or `https://your.app/api/integration/push-to-user`
+- Headers:
+  - `Authorization: Bearer prod-xyz-123`
+  - `Content-Type: application/json`
+ - Authentication: None (do not attach n8n credentials; set the headers above directly)
+- JSON Body (choose one targeting field):
+  - By userId:
+    ```json
+    { "userId": "{{$json.userid}}", "text": "Working on it...", "say": false }
+    ```
+  - By email:
+    ```json
+    { "email": "{{$json.userEmail}}", "text": "Your report is ready.", "voice": true }
+    ```
+
+Example node configuration (JSON view)
+```json
+{
+  "url": "http://backend:8080/api/integration/push-to-user",
+  "method": "POST",
+  "json": true,
+  "headers": {
+    "Authorization": "Bearer prod-xyz-123",
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "userId": "{{$json.userid}}",
+    "text": "Working on it...",
+    "say": false
+  }
+}
+```
+
+Notes
+- `voice: true` tells the UI to speak the message.
+- For text pushes, `say: true` will also speak the message.
+- Optional `role: "system"` will render as a system message; default is `assistant`.

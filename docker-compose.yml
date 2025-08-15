@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
   db:
     image: postgres:16-alpine
@@ -9,6 +11,7 @@ services:
       - db_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+
   backend:
     build:
       context: ./backend
@@ -22,10 +25,12 @@ services:
       - FRONTEND_ORIGIN=${FRONTEND_ORIGIN}
       - ADMIN_EMAILS=${ADMIN_EMAILS:-admin@example.com}
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-changeme}
+      - INTEGRATION_PUSH_TOKEN=${INTEGRATION_PUSH_TOKEN}
       - SEED_DB=true
       - NODE_ENV=production
     depends_on:
       - db
+
   frontend:
     build:
       context: ./frontend
@@ -41,5 +46,6 @@ services:
       - "5173:80"
     depends_on:
       - backend
+
 volumes:
   db_data:

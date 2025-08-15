@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppError, sendToWebhook, synthesizeTTS, transcribeAudio, getTtsStreamUrl } from '../lib/api'
-import { playAudioBuffer, stopAudio, playStreamUrl } from '../lib/audio'
+import { stopAudio, playStreamUrl, enqueueStreamUrl, setOnQueueIdleListener } from '../lib/audio'
 import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '../lib/config'
 
 export type CallState = 'idle' | 'listening' | 'processing' | 'speaking'
@@ -84,11 +84,11 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
           await new Promise(r=>setTimeout(r, 1200))
         }
       }
-      opts.onReply?.(reply)
+  opts.onReply?.(reply)
+  // Queue the audio so multiple replies play sequentially
   setState('speaking')
-  // Stream sanitized TTS audio (code omitted to save tokens)
-  await playStreamUrl(getTtsStreamUrl(reply))
-      setState('idle')
+  setOnQueueIdleListener(() => setState('idle'))
+  await enqueueStreamUrl(getTtsStreamUrl(reply))
     } catch (e) {
       setError(AppError.from(e))
       setState('idle')

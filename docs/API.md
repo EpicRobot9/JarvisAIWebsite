@@ -13,6 +13,18 @@ Admin
 - POST `/admin/approve` { userId }
 - POST `/admin/deny` { userId }
 
+Integration (token-secured; no cookie)
+- POST `/integration/push-to-user`
+	- Auth: `Authorization: Bearer <INTEGRATION_PUSH_TOKEN>` (or `x-api-token` header or `?token=` query)
+	- Body:
+		```json
+		{ "userId": "..." | null, "email": "user@example.com" | null, "text": "message", "say": false, "voice": false, "role": "assistant" }
+		```
+		- Provide either `userId` or `email`.
+		- If `voice` is true, the UI will TTS and play.
+		- If `say` is true on text push, the UI will TTS and play.
+		- `role` defaults to `assistant`.
+
 Voice/Callbacks
 - POST `/transcribe` multipart-form: file(webm), correlationId
 - POST `/jarvis/callback` { correlationId, result }
@@ -45,3 +57,4 @@ Per-user API key override headers
 Notes
 - All endpoints except signup/signin/me require authenticated session (`requireAuth`).
 - Admin endpoints require user.role === 'admin'.
+- Integration endpoints require a valid `INTEGRATION_PUSH_TOKEN` (comma-separated list allowed).

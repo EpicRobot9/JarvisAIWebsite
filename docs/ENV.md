@@ -17,6 +17,7 @@ Root `.env` variables (used by docker-compose):
 - VITE_WEBHOOK_TEST_URL=... (frontend test webhook)
 - VITE_CALLBACK_URL=/api/jarvis/callback (frontend)
 - VITE_SOURCE_NAME=jarvis-portal (frontend)
+- INTEGRATION_PUSH_TOKEN=token1,token2  # tokens allowed for /api/integration/push-to-user
 
 Backend-only:
 - TRANSCRIBE_MODEL=whisper-1 (or gpt-4o-mini-transcribe)
@@ -25,3 +26,4 @@ Notes:
 - For production, set strong SESSION_SECRET and use HTTPS terminated at a proxy.
 - Disable SEED_DB after initial bootstrap.
 - Users may override OpenAI/ElevenLabs keys client-side. The frontend will attach headers `x-openai-key` and `x-elevenlabs-key` to STT/TTS requests if present. When a custom ElevenLabs key is provided, the frontend will also send `x-elevenlabs-voice-id` if set in Settings; otherwise, the backend uses the default project voice.
+- To enable token-secured integration pushes (no admin session), set `INTEGRATION_PUSH_TOKEN` to a strong secret (or multiple, comma-separated). n8n or other systems call `/api/integration/push-to-user` with `Authorization: Bearer <token>`.

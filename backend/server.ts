@@ -45,6 +45,84 @@ async function sessionMiddleware(req: any, res: any, next: any) {
 }
 app.use(sessionMiddleware)
 
+// Observability: safe serialization and sanitizer
+const REDACT_KEYS = new Set(['password','newPassword','authorization','cookie','set-cookie','xi-api-key','x-openai-key'])
+function redact(obj: any): any {
+  try {
+    if (!obj || typeof obj !== 'object') return obj
+    if (Array.isArray(obj)) return obj.map(redact)
+    const out: any = {}
+    for (const [k,v] of Object.entries(obj)) {
+      if (REDACT_KEYS.has(k.toLowerCase())) out[k] = '[REDACTED]'
+      else if (typeof v === 'object') out[k] = redact(v)
+      else out[k] = v
+    }
+    return out
+  } catch { return obj }
+}
+function safeJsonPreview(obj: any, max = 2000): string | undefined {
+  try {
+    const s = typeof obj === 'string' ? obj : JSON.stringify(redact(obj))
+    return s.length > max ? s.slice(0, max) + '…' : s
+  } catch {
+    return undefined
+  }
+}
+
+// Request/response logger capturing inputs/outputs and errors
+app.use((req: any, res: any, next: any) => {
+  const start = Date.now()
+  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket.remoteAddress || undefined
+  const ua = req.headers['user-agent'] as string | undefined
+  const userId = req.user?.id as string | undefined
+  let logged = false
+
+  // Hook into res.end to capture status and body
+  const originalJson = res.json.bind(res)
+  const originalSend = res.send.bind(res)
+  let responseBodyPreview: string | undefined
+  res.json = (body: any) => {
+    try { responseBodyPreview = safeJsonPreview(body, 2000) } catch {}
+    return originalJson(body)
+  }
+  res.send = (body: any) => {
+    try { responseBodyPreview = typeof body === 'string' ? (body.length > 2000 ? body.slice(0,2000)+'…' : body) : safeJsonPreview(body, 2000) } catch {}
+    return originalSend(body)
+  }
+
+  function finalizeLog(err?: any) {
+    if (logged) return; logged = true
+    const duration = Date.now() - start
+    const method = (req.method || '').toUpperCase()
+    const path = req.path || req.originalUrl || req.url || ''
+    const status = res.statusCode || 0
+    const ok = status >= 200 && status < 400
+  const requestBodyPreview = safeJsonPreview(req.body, 1000)
+    const errorMessage = err ? (err.message || String(err)) : undefined
+    const errorStack = err && err.stack ? String(err.stack).slice(0, 4000) : undefined
+    // Avoid logging our own log-reading endpoint bodies to reduce noise
+    const skipBody = path.startsWith('/api/admin/logs')
+    ;(prisma as any).apiLog.create({
+      data: {
+        method, path, status, ok, durationMs: duration,
+        ip, userAgent: ua,
+        userId: userId || null,
+        requestBody: skipBody ? undefined : requestBodyPreview,
+        responseBody: skipBody ? undefined : responseBodyPreview,
+        errorMessage, errorStack,
+      }
+    }).then((row: any) => {
+      try { broadcastLog(row) } catch {}
+    }).catch(()=>{})
+  }
+
+  res.on('finish', () => finalizeLog())
+  res.on('close', () => finalizeLog())
+
+  // Proceed to route handlers
+  next()
+})
+
 // Env validation
 const EnvSchema = z.object({
   FRONTEND_ORIGIN: z.string().optional(),
@@ -56,6 +134,7 @@ const EnvSchema = z.object({
   ELEVENLABS_VOICE_ID: z.string().optional(),
   N8N_WEBHOOK_URL: z.string().url().optional(),
   APP_URL: z.string().url().optional(),
+  INTEGRATION_PUSH_TOKEN: z.string().optional(), // comma-separated accepted
 })
 const envParse = EnvSchema.safeParse(process.env)
 if (!envParse.success) {
@@ -65,6 +144,13 @@ if (!envParse.success) {
     process.exit(1)
   }
 }
+// Parse integration tokens (public, token-authenticated Control API)
+const INTEGRATION_TOKENS: Set<string> = new Set(
+  (process.env.INTEGRATION_PUSH_TOKEN || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+)
 
 // Simple in-memory pub/sub keyed by sessionId with WS + SSE transport
 type EventPayload =
@@ -73,6 +159,10 @@ type EventPayload =
   | { type: 'call-end'; reason?: string }
 
 const subscribers = new Map<string, Set<{ kind: 'ws' | 'sse'; send: (data: string) => void; end?: () => void }>>()
+// Map sessions to users for user-targeted broadcasting
+const sessionToUserId = new Map<string, string>()
+const sessionsByUserId = new Map<string, Set<string>>()
+
 function publish(sessionId: string, payload: EventPayload) {
   const subs = subscribers.get(sessionId)
   if (!subs) return
@@ -81,14 +171,32 @@ function publish(sessionId: string, payload: EventPayload) {
     try { s.send(msg) } catch { /* noop */ }
   }
 }
-function subscribe(sessionId: string, sub: { kind: 'ws' | 'sse'; send: (data: string) => void; end?: () => void }) {
+function publishToUser(userId: string, payload: EventPayload) {
+  const set = sessionsByUserId.get(userId)
+  if (!set) return
+  for (const sid of set) publish(sid, payload)
+}
+
+function subscribe(sessionId: string, sub: { kind: 'ws' | 'sse'; send: (data: string) => void; end?: () => void }, userId?: string) {
   if (!subscribers.has(sessionId)) subscribers.set(sessionId, new Set())
   subscribers.get(sessionId)!.add(sub)
+  if (userId) {
+    sessionToUserId.set(sessionId, userId)
+    if (!sessionsByUserId.has(userId)) sessionsByUserId.set(userId, new Set())
+    sessionsByUserId.get(userId)!.add(sessionId)
+  }
   return () => {
     const set = subscribers.get(sessionId)
     if (set) {
       set.delete(sub)
       if (set.size === 0) subscribers.delete(sessionId)
+    }
+    const uid = sessionToUserId.get(sessionId)
+    if (uid) {
+      const s = sessionsByUserId.get(uid)
+      s?.delete(sessionId)
+      if (s && s.size === 0) sessionsByUserId.delete(uid)
+      if (!subscribers.has(sessionId)) sessionToUserId.delete(sessionId)
     }
     try { sub.end?.() } catch {}
   }
@@ -105,21 +213,65 @@ function requireAdmin(req: any, res: any, next: any) {
   next()
 }
 
+// Integration token guard (no cookie required)
+function requireIntegrationToken(req: any, res: any, next: any) {
+  try {
+    if (INTEGRATION_TOKENS.size === 0) return res.status(501).json({ error: 'integration_disabled' })
+    // Prefer Authorization: Bearer <token>
+    const auth = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined
+    let token = ''
+    if (auth && /^Bearer\s+/i.test(auth)) token = auth.replace(/^Bearer\s+/i, '').trim()
+    if (!token) token = (req.headers['x-api-token'] as string || '').trim()
+    if (!token) token = (req.query.token as string || '').trim()
+    if (!token || !INTEGRATION_TOKENS.has(token)) return res.status(401).json({ error: 'invalid_token' })
+    ;(req as any).integrationToken = token
+    next()
+  } catch {
+    return res.status(401).json({ error: 'invalid_token' })
+  }
+}
+
+// Global settings cache + helpers
+type FlagKey = 'REQUIRE_ADMIN_APPROVAL' | 'LOCK_NEW_ACCOUNTS'
+const DEFAULT_FLAGS: Record<FlagKey, string> = {
+  REQUIRE_ADMIN_APPROVAL: process.env.REQUIRE_ADMIN_APPROVAL || 'false',
+  LOCK_NEW_ACCOUNTS: process.env.LOCK_NEW_ACCOUNTS || 'false',
+}
+const settingsCache = new Map<FlagKey, string>()
+async function getFlag(key: FlagKey): Promise<string> {
+  const cached = settingsCache.get(key)
+  if (cached !== undefined) return cached
+  try {
+    const s = await (prisma as any).setting.findUnique({ where: { key } })
+    const v = s?.value ?? DEFAULT_FLAGS[key] ?? 'false'
+    settingsCache.set(key, v)
+    return v
+  } catch {
+    return DEFAULT_FLAGS[key] ?? 'false'
+  }
+}
+async function setFlag(key: FlagKey, value: string): Promise<void> {
+  await (prisma as any).setting.upsert({ where: { key }, update: { value }, create: { key, value } })
+  settingsCache.set(key, value)
+}
+
 // Rate limit auth
 const authLimiter = rateLimit({ windowMs: 60_000, max: 30 })
+// Rate limit token-based integration pushes per-IP
+const integrationLimiter = rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false })
 
 // Auth routes
 app.post('/api/auth/signup', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {}
     if (!email || !password) return res.status(400).json({ error: 'missing_fields' })
-    if (process.env.LOCK_NEW_ACCOUNTS === 'true') return res.status(403).json({ error: 'locked' })
+    if ((await getFlag('LOCK_NEW_ACCOUNTS')) === 'true') return res.status(403).json({ error: 'locked' })
     const existing = await prisma.user.findUnique({ where: { email } })
     if (existing) return res.status(409).json({ error: 'exists' })
     const passwordHash = await bcrypt.hash(password, 10)
 
   let status: 'active' | 'pending' | 'denied' = 'active'
-  if (process.env.REQUIRE_ADMIN_APPROVAL === 'true') status = 'pending'
+  if ((await getFlag('REQUIRE_ADMIN_APPROVAL')) === 'true') status = 'pending'
 
   const role: 'admin' | 'user' = (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).includes(email) ? 'admin' : 'user'
 
@@ -187,12 +339,87 @@ app.post('/api/admin/deny', requireAuth, requireAdmin, async (req: any, res) => 
   res.json({ ok: true, user: { id: user.id, status: user.status } })
 })
 
+// Admin: global settings get/set for signup flow
+app.get('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
+  const requireApproval = await getFlag('REQUIRE_ADMIN_APPROVAL')
+  const lockNew = await getFlag('LOCK_NEW_ACCOUNTS')
+  res.json({ REQUIRE_ADMIN_APPROVAL: requireApproval === 'true', LOCK_NEW_ACCOUNTS: lockNew === 'true' })
+})
+app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
+  const body = req.body || {}
+  const map: Partial<Record<FlagKey, string>> = {}
+  if (typeof body.REQUIRE_ADMIN_APPROVAL === 'boolean') map.REQUIRE_ADMIN_APPROVAL = body.REQUIRE_ADMIN_APPROVAL ? 'true' : 'false'
+  if (typeof body.LOCK_NEW_ACCOUNTS === 'boolean') map.LOCK_NEW_ACCOUNTS = body.LOCK_NEW_ACCOUNTS ? 'true' : 'false'
+  const entries = Object.entries(map) as Array<[FlagKey,string]>
+  for (const [k,v] of entries) await setFlag(k, v)
+  const current = {
+    REQUIRE_ADMIN_APPROVAL: (await getFlag('REQUIRE_ADMIN_APPROVAL')) === 'true',
+    LOCK_NEW_ACCOUNTS: (await getFlag('LOCK_NEW_ACCOUNTS')) === 'true',
+  }
+  res.json({ ok: true, settings: current })
+})
+
 // Admin: users listing
 app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   const users = await prisma.user.findMany({
     select: { id: true, email: true, role: true, status: true, createdAt: true }
   })
   res.json(users)
+})
+
+// Admin: logs - list recent with filters
+app.get('/api/admin/logs', requireAuth, requireAdmin, async (req: any, res) => {
+  const take = Math.min(Number(req.query.take || 100), 500)
+  const cursor = req.query.cursor as string | undefined
+  const path = (req.query.path as string | undefined)?.trim()
+  const status = req.query.status ? Number(req.query.status) : undefined
+  const ok = typeof req.query.ok === 'string' ? req.query.ok === 'true' ? true : req.query.ok === 'false' ? false : undefined : undefined
+  const method = (req.query.method as string | undefined)?.toUpperCase()
+  const where: any = {}
+  if (path) where.path = { contains: path, mode: 'insensitive' }
+  if (typeof status === 'number' && !Number.isNaN(status)) where.status = status
+  if (typeof ok === 'boolean') where.ok = ok
+  if (method) where.method = method
+  const logs = await (prisma as any).apiLog.findMany({
+    where,
+    orderBy: { ts: 'desc' },
+    take,
+    ...(cursor ? { skip: 1, cursor: { id: cursor } } : {})
+  })
+  res.json({ items: logs, nextCursor: logs.length === take ? logs[logs.length-1]?.id : null })
+})
+
+// Admin: single log
+app.get('/api/admin/logs/:id', requireAuth, requireAdmin, async (req, res) => {
+  const id = req.params.id
+  const log = await (prisma as any).apiLog.findUnique({ where: { id } })
+  res.json(log || null)
+})
+
+// Admin: logs stream via SSE
+type LogSubscriber = { send: (data: string) => void, end: () => void }
+const logSubscribers = new Set<LogSubscriber>()
+function broadcastLog(row: any) {
+  const msg = `data: ${JSON.stringify(row)}\n\n`
+  for (const s of Array.from(logSubscribers)) {
+    try { s.send(msg) } catch { try { s.end() } catch {}; logSubscribers.delete(s) }
+  }
+}
+app.get('/api/admin/logs/stream', requireAuth, requireAdmin, (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders?.()
+  const send = (chunk: string) => res.write(chunk)
+  const end = () => { try { res.end() } catch {} }
+  const sub: LogSubscriber = { send, end }
+  logSubscribers.add(sub)
+  // initial hello
+  try { send(`event: hello\ndata: ${JSON.stringify({ ok: true, ts: Date.now() })}\n\n`) } catch {}
+  const hb = setInterval(() => {
+    try { send(`: ping ${Date.now()}\n\n`) } catch { /* noop */ }
+  }, 15000)
+  req.on('close', () => { clearInterval(hb); logSubscribers.delete(sub); end() })
 })
 
 // Admin: change role (user/admin)
@@ -444,6 +671,52 @@ app.post('/api/push-voice', async (req, res) => {
   res.json({ ok: true })
 })
 
+// Admin: push by user targeting (userId or email) for n8n integrations
+const PushUserBody = z.object({ userId: z.string().optional(), email: z.string().email().optional(), text: z.string().min(1), say: z.boolean().optional(), voice: z.boolean().optional() })
+app.post('/api/admin/push-to-user', requireAuth, requireAdmin, async (req, res) => {
+  const v = PushUserBody.safeParse(req.body)
+  if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
+  const { userId: uid, email, text, say, voice } = v.data
+  let targetId = uid || null
+  if (!targetId && email) {
+    const u = await prisma.user.findUnique({ where: { email } }).catch(()=>null)
+    targetId = u?.id || null
+  }
+  if (!targetId) return res.status(404).json({ error: 'user_not_found' })
+  // Broadcast to all sessions for this user
+  publishToUser(targetId, voice ? { type: 'push-voice', text } : { type: 'push', text, role: 'assistant', say })
+  res.json({ ok: true })
+})
+
+// Public, token-secured: push to user by userId or email (no admin cookie)
+// Auth: Authorization: Bearer <INTEGRATION_PUSH_TOKEN>
+// Body: { userId?: string, email?: string, text: string, say?: boolean, voice?: boolean, role?: 'assistant'|'system' }
+const PushIntegrationBody = z.object({
+  userId: z.string().optional(),
+  email: z.string().email().optional(),
+  text: z.string().min(1),
+  say: z.boolean().optional(),
+  voice: z.boolean().optional(),
+  role: z.enum(['assistant','system']).optional()
+})
+app.post('/api/integration/push-to-user', integrationLimiter, requireIntegrationToken, async (req, res) => {
+  const v = PushIntegrationBody.safeParse(req.body)
+  if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
+  const { userId: uid, email, text, say, voice, role } = v.data
+  if (!uid && !email) return res.status(400).json({ error: 'missing_target' })
+  let targetId = uid || null
+  if (!targetId && email) {
+    const u = await prisma.user.findUnique({ where: { email } }).catch(()=>null)
+    targetId = u?.id || null
+  }
+  if (!targetId) return res.status(404).json({ error: 'user_not_found' })
+  const payload: EventPayload = voice
+    ? { type: 'push-voice', text }
+    : { type: 'push', text, role: role || 'assistant', say }
+  publishToUser(targetId, payload)
+  res.json({ ok: true })
+})
+
 const CallEndBody = z.object({ sessionId: z.string().min(1), reason: z.string().optional() })
 app.post('/api/call/end', async (req, res) => {
   const v = CallEndBody.safeParse(req.body)
@@ -462,7 +735,8 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Connection', 'keep-alive')
   res.flushHeaders?.()
   const send = (data: string) => res.write(`data: ${data}\n\n`)
-  const unsub = subscribe(sessionId, { kind: 'sse', send, end: () => res.end() })
+  const userId = (req as any).user?.id as string | undefined
+  const unsub = subscribe(sessionId, { kind: 'sse', send, end: () => res.end() }, userId)
   req.on('close', () => unsub())
 })
 
@@ -477,9 +751,10 @@ server.on('upgrade', (request, socket, head) => {
     if (url.pathname !== '/api/events') return
     const sessionId = url.searchParams.get('sessionId') || ''
     if (!sessionId) return socket.destroy()
-  wss.handleUpgrade(request, socket as any, head, (ws: WebSocket) => {
+    const userId = url.searchParams.get('userId') || undefined
+    wss.handleUpgrade(request, socket as any, head, (ws: WebSocket) => {
       const send = (data: string) => ws.readyState === ws.OPEN && ws.send(data)
-      const unsub = subscribe(sessionId, { kind: 'ws', send, end: () => ws.close() })
+      const unsub = subscribe(sessionId, { kind: 'ws', send, end: () => ws.close() }, userId)
       ws.on('close', () => unsub())
       ws.send(JSON.stringify({ type: 'hello', sessionId }))
     })

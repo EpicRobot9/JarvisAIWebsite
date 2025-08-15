@@ -6,6 +6,7 @@ import App from './App'
 import SignIn from './pages/SignIn'
 import SignUp from './pages/SignUp'
 import Admin from './pages/Admin'
+import AwaitingApproval from './pages/AwaitingApproval'
 import Page from '../app/(ui)/page'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -17,6 +18,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   <Route path="/admin" element={<Admin />} />
         <Route path="/signin" element={<SignIn />} />
         <Route path="/signup" element={<SignUp />} />
+  <Route path="/awaiting" element={<AwaitingApproval />} />
   {/** Dashboard removed; portal is the only app surface */}
   <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
