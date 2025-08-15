@@ -8,6 +8,8 @@ let currentMediaEl: HTMLAudioElement | null = null
 let currentMediaNode: MediaElementAudioSourceNode | null = null
 let levelListener: ((level: number)=>void) | null = null
 let rafId: number | null = null
+let currentMessageId: string | null = null
+const ttsCache = new Map<string, ArrayBuffer>()
 
 function getCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 })
@@ -99,6 +101,7 @@ export async function playAudioBuffer(arrayBuffer: ArrayBuffer): Promise<void> {
   return new Promise((resolve) => {
     src.onended = () => {
       if (currentSource === src) currentSource = null
+  currentMessageId = null
       if (rafId) { cancelAnimationFrame(rafId); rafId = null }
       resolve()
     }
@@ -134,6 +137,7 @@ export async function stopAudio(): Promise<void> {
     try { currentMediaNode.disconnect() } catch {}
     currentMediaNode = null
   }
+  currentMessageId = null
 }
 
 /** Allow UI to subscribe to playback level [0..1] for visualization. */
@@ -167,6 +171,7 @@ export async function playStreamUrl(url: string): Promise<void> {
     let started = false
     audio.addEventListener('ended', () => {
       if (rafId) { cancelAnimationFrame(rafId); rafId = null }
+  currentMessageId = null
       resolve()
     })
     audio.addEventListener('error', () => {
@@ -191,4 +196,31 @@ export async function playStreamUrl(url: string): Promise<void> {
       tick()
     }
   })
+}
+
+// --- TTS cache helpers ---
+export function cacheTts(messageId: string, buf: ArrayBuffer) {
+  ttsCache.set(messageId, buf)
+}
+export function hasCachedTts(messageId: string): boolean {
+  return ttsCache.has(messageId)
+}
+export function getCachedTts(messageId: string): ArrayBuffer | undefined {
+  return ttsCache.get(messageId)
+}
+export function clearCachedTts(messageId: string) {
+  ttsCache.delete(messageId)
+}
+export function isPlayingMessage(messageId: string): boolean {
+  return currentMessageId === messageId
+}
+export async function playAudioBufferForMessage(messageId: string, buf: ArrayBuffer): Promise<void> {
+  currentMessageId = messageId
+  await playAudioBuffer(buf)
+}
+export async function playCachedTts(messageId: string): Promise<void> {
+  const buf = ttsCache.get(messageId)
+  if (!buf) return
+  currentMessageId = messageId
+  await playAudioBuffer(buf)
 }

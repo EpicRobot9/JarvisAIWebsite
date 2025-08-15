@@ -39,7 +39,13 @@ See also: `docs/N8N.md` for detailed n8n HTTP Request node examples (push/push-v
 ## Accounts
 
 - Sign up at `/signup`. If `REQUIRE_ADMIN_APPROVAL=true`, new users start as pending; an admin must approve (admin tools live in the API; the standalone Dashboard has been removed in favor of the main Portal).
-- To make an admin, set `ADMIN_EMAILS="admin@example.com"` before first run (or run the seed again with `SEED_DB=true`).
+- Default admin (development):
+	- Email: admin@example.com
+	- Password: changeme (or override with `ADMIN_DEFAULT_PASSWORD`)
+	- This user is created automatically when `SEED_DB=true` (enabled in docker-compose) and `ADMIN_EMAILS=admin@example.com`.
+	- If the user already exists, the seeder will set the role to admin, mark status active, and reset the password to the default.
+	- Change the password immediately in production.
+- To make additional admins, set `ADMIN_EMAILS="admin@example.com,another@site.com"` before first run (or run the seed again with `SEED_DB=true`).
 - Sign in at `/signin`.
 
 ## Environment variables

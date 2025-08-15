@@ -1,6 +1,4 @@
 import { useEffect } from 'react'
-import { playAudioBuffer } from './audio'
-import { synthesizeTTS } from './api'
 
 type ServerEvent =
   | { type: 'hello'; sessionId: string }
@@ -12,6 +10,7 @@ export function useEventChannel(sessionId: string, opts: {
   onPush: (ev: Extract<ServerEvent, { type: 'push' }>) => void
   onCallEnd: (ev: Extract<ServerEvent, { type: 'call-end' }>) => void
   setSpeaking: (speaking: boolean) => void
+  onSpeak?: (text: string) => Promise<void>
 }) {
   useEffect(() => {
     if (!sessionId) return
@@ -45,22 +44,12 @@ export function useEventChannel(sessionId: string, opts: {
     async function handle(ev: ServerEvent) {
       if (ev.type === 'push') {
         opts.onPush(ev)
-        if (ev.say) {
-          try {
-            opts.setSpeaking(true)
-            const audio = await synthesizeTTS(ev.text)
-            await playAudioBuffer(audio)
-          } finally {
-            opts.setSpeaking(false)
-          }
+        if (ev.say && opts.onSpeak) {
+          try { opts.setSpeaking(true); await opts.onSpeak(ev.text) } finally { opts.setSpeaking(false) }
         }
       } else if (ev.type === 'push-voice') {
-        try {
-          opts.setSpeaking(true)
-          const audio = await synthesizeTTS(ev.text)
-          await playAudioBuffer(audio)
-        } finally {
-          opts.setSpeaking(false)
+        if (opts.onSpeak) {
+          try { opts.setSpeaking(true); await opts.onSpeak(ev.text) } finally { opts.setSpeaking(false) }
         }
       } else if (ev.type === 'call-end') {
         opts.onCallEnd(ev)

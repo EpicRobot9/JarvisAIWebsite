@@ -12,6 +12,7 @@ import { toFile } from 'openai/uploads'
 import fetch from 'node-fetch'
 import { z } from 'zod'
 import { WebSocketServer } from 'ws'
+import type { WebSocket } from 'ws'
 
 dotenv.config()
 
@@ -26,6 +27,8 @@ app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 app.use(cookieParser(process.env.SESSION_SECRET || ''))
+// Trust reverse proxy (nginx) so rate-limit sees the correct client IP
+app.set('trust proxy', 1)
 
 // Simple in-memory callback store
 const callbacks = new Map<string, any>()
@@ -182,6 +185,45 @@ app.post('/api/admin/deny', requireAuth, requireAdmin, async (req: any, res) => 
   const user = await prisma.user.update({ where: { id: userId }, data: { status: 'denied' } })
   await prisma.approval.updateMany({ where: { userId }, data: { status: 'denied', decidedById: req.user.id, decidedAt: new Date() } })
   res.json({ ok: true, user: { id: user.id, status: user.status } })
+})
+
+// Admin: users listing
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+  const users = await prisma.user.findMany({
+    select: { id: true, email: true, role: true, status: true, createdAt: true }
+  })
+  res.json(users)
+})
+
+// Admin: change role (user/admin)
+app.post('/api/admin/set-role', requireAuth, requireAdmin, async (req: any, res) => {
+  const { userId, role } = req.body || {}
+  if (!userId || (role !== 'admin' && role !== 'user')) return res.status(400).json({ error: 'invalid_body' })
+  // Optional: prevent demoting the last admin (not implemented here)
+  const user = await prisma.user.update({ where: { id: userId }, data: { role } })
+  res.json({ ok: true, user: { id: user.id, role: user.role } })
+})
+
+// Admin: delete user and related data
+app.post('/api/admin/delete', requireAuth, requireAdmin, async (req: any, res) => {
+  const { userId } = req.body || {}
+  if (!userId) return res.status(400).json({ error: 'invalid_body' })
+  if (userId === req.user.id) return res.status(400).json({ error: 'cannot_delete_self' })
+  await prisma.session.deleteMany({ where: { userId } }).catch(()=>{})
+  await prisma.approval.deleteMany({ where: { userId } }).catch(()=>{})
+  await prisma.user.delete({ where: { id: userId } })
+  res.json({ ok: true })
+})
+
+// Admin: reset password
+app.post('/api/admin/reset-password', requireAuth, requireAdmin, async (req: any, res) => {
+  const { userId, newPassword } = req.body || {}
+  if (!userId || typeof newPassword !== 'string' || newPassword.length < 6) return res.status(400).json({ error: 'invalid_body' })
+  const passwordHash = await bcrypt.hash(newPassword, 10)
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash } })
+  // Invalidate sessions
+  await prisma.session.deleteMany({ where: { userId } }).catch(()=>{})
+  res.json({ ok: true })
 })
 
 // Transcription route
@@ -435,7 +477,7 @@ server.on('upgrade', (request, socket, head) => {
     if (url.pathname !== '/api/events') return
     const sessionId = url.searchParams.get('sessionId') || ''
     if (!sessionId) return socket.destroy()
-  wss.handleUpgrade(request, socket as any, head, (ws: import('ws')) => {
+  wss.handleUpgrade(request, socket as any, head, (ws: WebSocket) => {
       const send = (data: string) => ws.readyState === ws.OPEN && ws.send(data)
       const unsub = subscribe(sessionId, { kind: 'ws', send, end: () => ws.close() })
       ws.on('close', () => unsub())

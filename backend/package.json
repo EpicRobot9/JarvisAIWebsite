@@ -10,6 +10,7 @@
     "dev": "tsx watch server.ts",
     "start": "node dist/server.js",
     "build": "tsc",
+  "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",

@@ -1,7 +1,9 @@
 # Backend Dockerfile
 FROM node:20-alpine AS build
 WORKDIR /app
+# Copy manifests first for caching, plus Prisma schema so postinstall can generate
 COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
+COPY prisma ./prisma
 RUN npm ci || npm install
 COPY . .
 RUN npm run build

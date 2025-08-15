@@ -5,6 +5,7 @@ import './index.css'
 import App from './App'
 import SignIn from './pages/SignIn'
 import SignUp from './pages/SignUp'
+import Admin from './pages/Admin'
 import Page from '../app/(ui)/page'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -13,6 +14,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <Routes>
   <Route path="/" element={<Page />} />
   <Route path="/portal" element={<App />} />
+  <Route path="/admin" element={<Admin />} />
         <Route path="/signin" element={<SignIn />} />
         <Route path="/signup" element={<SignUp />} />
   {/** Dashboard removed; portal is the only app surface */}

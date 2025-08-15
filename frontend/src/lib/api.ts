@@ -47,6 +47,7 @@ export async function sendToWebhook(
       body: JSON.stringify({
         chatInput: text,
         userid: opts.userId || 'anon',
+        username: (localStorage.getItem('user_name') || '').trim() || undefined,
         correlationId,
         callbackUrl: opts.callbackUrl,
         source: opts.source,
@@ -120,7 +121,15 @@ export async function sendToRouter(text: string, session: { userId: string; conv
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ userId: session.userId, userid: session.userId, message: text, conversationId: session.conversationId, mode: 'voice', metadata: { client: 'web' } })
+      body: JSON.stringify({
+        userId: session.userId,
+        userid: session.userId,
+        username: (localStorage.getItem('user_name') || '').trim() || undefined,
+        message: text,
+        conversationId: session.conversationId,
+        mode: 'voice',
+        metadata: { client: 'web' }
+      })
     })
     if (!r.ok) throw new AppError('router_failed', `Router error ${r.status}: ${r.statusText}`, await safeText(r))
     const data = await r.json()
@@ -134,13 +143,14 @@ export async function sendToRouter(text: string, session: { userId: string; conv
 export async function synthesizeTTS(text: string): Promise<ArrayBuffer> {
   try {
   const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+  const clean = sanitizeForTTS(text)
   const userEl = localStorage.getItem('user_elevenlabs_api_key') || ''
   if (userEl) {
     headers['x-elevenlabs-key'] = userEl
     const vid = (localStorage.getItem('user_elevenlabs_voice_id') || '').trim()
     if (vid) headers['x-elevenlabs-voice-id'] = vid
   }
-  const r = await fetch('/api/tts', { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ text }) })
+  const r = await fetch('/api/tts', { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ text: clean }) })
     if (!r.ok) throw new AppError('tts_failed', `TTS error ${r.status}: ${r.statusText}`, await safeText(r))
     return await r.arrayBuffer()
   } catch (e) {
@@ -156,7 +166,7 @@ async function safeText(r: Response) {
 /** Build a streaming TTS URL for low-latency playback. */
 export function getTtsStreamUrl(text: string): string {
   const params = new URLSearchParams()
-  params.set('text', text)
+  params.set('text', sanitizeForTTS(text))
   const userEl = (localStorage.getItem('user_elevenlabs_api_key') || '').trim()
   if (userEl) {
     params.set('key', userEl)
@@ -166,4 +176,25 @@ export function getTtsStreamUrl(text: string): string {
   // Lower initial chunk latency; 2 is a good balance of quality/latency
   params.set('opt', '2')
   return `/api/tts/stream?${params.toString()}`
+}
+
+/** Remove code blocks and inline code before sending to TTS to avoid reading code and save tokens. */
+function sanitizeForTTS(text: string): string {
+  try {
+    let t = (text || '').toString()
+    // Remove fenced code blocks ```...``` and ~~~...~~~
+    t = t.replace(/```[\s\S]*?```/g, ' [code omitted] ')
+    t = t.replace(/~~~[\s\S]*?~~~/g, ' [code omitted] ')
+    // Remove inline code `...`
+    t = t.replace(/`[^`]*`/g, ' [code] ')
+    // Collapse whitespace
+    t = t.replace(/\n{3,}/g, '\n\n').replace(/[\t ]{2,}/g, ' ').trim()
+    if (!t) t = 'Response contains code only; see chat for details.'
+    // Cap length to keep TTS short
+    const MAX = 1200
+    if (t.length > MAX) t = t.slice(0, MAX) + '…'
+    return t
+  } catch {
+    return text
+  }
 }

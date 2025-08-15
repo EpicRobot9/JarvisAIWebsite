@@ -54,7 +54,7 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
     try {
       const { text } = await transcribeAudio(blob)
       opts.onTranscript?.(text)
-      const { correlationId, immediateText } = await sendToWebhook(text, {
+  const { correlationId, immediateText } = await sendToWebhook(text, {
         userId: opts.userId || 'anon',
         webhookUrl: currentWebhookUrl,
         callbackUrl: CALLBACK_URL,
@@ -84,7 +84,8 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
         }
       }
       opts.onReply?.(reply)
-      setState('speaking')
+  setState('speaking')
+  // Stream sanitized TTS audio (code omitted to save tokens)
   await playStreamUrl(getTtsStreamUrl(reply))
       setState('idle')
     } catch (e) {
