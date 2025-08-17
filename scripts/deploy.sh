@@ -163,3 +163,20 @@ if [[ "$ADMIN_RESET_MODE" == "once" ]]; then
 fi
 
 echo "\nDeployed. If using Cloudflare Tunnel, ensure a Public Hostname techexplore.us -> http://frontend:80 is configured."
+
+# Print admin summary for convenience
+echo "\n--- Admin summary ---"
+ADMIN_NAMES=$(grep -E '^ADMIN_USERNAMES=' "$DIR_ROOT/.env" 2>/dev/null | cut -d= -f2-)
+if [[ -z "$ADMIN_NAMES" ]]; then
+  ADMIN_NAMES=$(grep -E '^ADMIN_EMAILS=' "$DIR_ROOT/.env" 2>/dev/null | cut -d= -f2-)
+fi
+if [[ -z "$ADMIN_NAMES" ]]; then ADMIN_NAMES="admin"; fi
+SEED_MODE=$(grep -E '^ADMIN_SEED_MODE=' "$DIR_ROOT/.env" 2>/dev/null | cut -d= -f2-)
+ADMIN_PASS=$(grep -E '^ADMIN_DEFAULT_PASSWORD=' "$DIR_ROOT/.env" 2>/dev/null | cut -d= -f2-)
+echo "Admin user(s): ${ADMIN_NAMES}"
+if [[ "$SEED_MODE" == "reset" && -n "$ADMIN_PASS" ]]; then
+  echo "Admin password: ${ADMIN_PASS} (from ADMIN_DEFAULT_PASSWORD; SEED reset)"
+else
+  echo "Admin password: unchanged (seed mode: ${SEED_MODE:-ensure}). Use --admin-reset once|always to set."
+fi
+echo "----------------------\n"
