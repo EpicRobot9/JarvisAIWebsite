@@ -20,6 +20,10 @@ NO_BUILD=false
 OPENAI_API_KEY_IN="${OPENAI_API_KEY:-}"
 ELEVENLABS_API_KEY_IN="${ELEVENLABS_API_KEY:-}"
 ELEVENLABS_VOICE_ID_IN="${ELEVENLABS_VOICE_ID:-}"
+# Admin control
+ADMIN_USER_IN="${ADMIN_USER:-}"
+ADMIN_PASSWORD_IN="${ADMIN_PASSWORD:-}"
+ADMIN_RESET_MODE="${ADMIN_RESET_MODE:-no}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,6 +35,14 @@ while [[ $# -gt 0 ]]; do
     --pull) PULL=true; shift ;;
     --no-build) NO_BUILD=true; shift ;;
     -p|--project) PROJECT_NAME="$2"; shift 2 ;;
+    --admin-user) ADMIN_USER_IN="$2"; shift 2 ;;
+    --admin-password) ADMIN_PASSWORD_IN="$2"; shift 2 ;;
+    --admin-reset)
+      case "$2" in
+        no|once|always) ADMIN_RESET_MODE="$2" ;;
+        *) echo "--admin-reset must be one of: no|once|always"; exit 1 ;;
+      esac
+      shift 2 ;;
     -h|--help)
       echo "Usage: $0 [--pull] [--domain techexplore.us] [--use-tunnel auto|yes|no] [--openai-key <sk_...>] [--elevenlabs-key <...>] [--elevenlabs-voice <voiceId>] [--no-build] [--project techexplore]";
       exit 0 ;;
@@ -47,6 +59,17 @@ fi
 
 cd "$DIR_ROOT"
 
+# Helper for .env upsert
+set_env() {
+  local key="$1"; shift
+  local val="$1"; shift || true
+  if grep -q "^${key}=" .env 2>/dev/null; then
+    sed -i "s|^${key}=.*$|${key}=${val}|" .env
+  else
+    printf '%s=%s\n' "$key" "$val" >> .env
+  fi
+}
+
 # Optional git pull for code updates
 if [[ "$PULL" == true ]]; then
   if [ -d .git ]; then
@@ -58,34 +81,28 @@ fi
 
 # Safe .env tweak only if domain provided
 if [[ -n "$DOMAIN" ]]; then
-  if grep -q '^FRONTEND_ORIGIN=' .env 2>/dev/null; then
-    sed -i "s|^FRONTEND_ORIGIN=.*$|FRONTEND_ORIGIN=https://${DOMAIN}|" .env
-  else
-    printf '\nFRONTEND_ORIGIN=https://%s\n' "$DOMAIN" >> .env
-  fi
+  set_env FRONTEND_ORIGIN "https://${DOMAIN}"
 fi
 
 # Optionally inject keys
-if [[ -n "$OPENAI_API_KEY_IN" ]]; then
-  if grep -q '^OPENAI_API_KEY=' .env 2>/dev/null; then
-    sed -i "s|^OPENAI_API_KEY=.*$|OPENAI_API_KEY=${OPENAI_API_KEY_IN}|" .env
-  else
-    printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY_IN" >> .env
-  fi
+if [[ -n "$OPENAI_API_KEY_IN" ]]; then set_env OPENAI_API_KEY "$OPENAI_API_KEY_IN"; fi
+if [[ -n "$ELEVENLABS_API_KEY_IN" ]]; then set_env ELEVENLABS_API_KEY "$ELEVENLABS_API_KEY_IN"; fi
+if [[ -n "$ELEVENLABS_VOICE_ID_IN" ]]; then set_env ELEVENLABS_VOICE_ID "$ELEVENLABS_VOICE_ID_IN"; fi
+
+# Admin ensure/reset per request
+if [[ -n "$ADMIN_USER_IN" ]]; then
+  set_env ADMIN_USERNAMES "$ADMIN_USER_IN"
 fi
-if [[ -n "$ELEVENLABS_API_KEY_IN" ]]; then
-  if grep -q '^ELEVENLABS_API_KEY=' .env 2>/dev/null; then
-    sed -i "s|^ELEVENLABS_API_KEY=.*$|ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY_IN}|" .env
-  else
-    printf 'ELEVENLABS_API_KEY=%s\n' "$ELEVENLABS_API_KEY_IN" >> .env
+
+if [[ "$ADMIN_RESET_MODE" != "no" ]]; then
+  PASS_TO_USE="$ADMIN_PASSWORD_IN"
+  if [[ -z "$PASS_TO_USE" ]]; then
+    PASS_TO_USE=$(openssl rand -base64 18 2>/dev/null | tr -d '\n' | tr '/+' 'AB' | cut -c1-18)
   fi
-fi
-if [[ -n "$ELEVENLABS_VOICE_ID_IN" ]]; then
-  if grep -q '^ELEVENLABS_VOICE_ID=' .env 2>/dev/null; then
-    sed -i "s|^ELEVENLABS_VOICE_ID=.*$|ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID_IN}|" .env
-  else
-    printf 'ELEVENLABS_VOICE_ID=%s\n' "$ELEVENLABS_VOICE_ID_IN" >> .env
-  fi
+  set_env ADMIN_DEFAULT_PASSWORD "$PASS_TO_USE"
+  set_env ADMIN_SEED_MODE "reset"
+  set_env SEED_DB "true"
+  echo "[update] Admin reset requested (${ADMIN_RESET_MODE}). Username=$(grep '^ADMIN_USERNAMES=' .env | cut -d= -f2), Password=${PASS_TO_USE}"
 fi
 
 # Decide whether to include the tunnel compose file
@@ -123,5 +140,11 @@ else
   docker compose "${compose_files[@]}" up -d --build
 fi
 set +x
+
+# Revert to ensure if requested once
+if [[ "$ADMIN_RESET_MODE" == "once" ]]; then
+  set_env ADMIN_SEED_MODE "ensure"
+  echo "[update] Admin reset completed; reverting ADMIN_SEED_MODE=ensure."
+fi
 
 echo "\nUpdate complete. Visit https://${DOMAIN:-your-domain} (if domain configured)."

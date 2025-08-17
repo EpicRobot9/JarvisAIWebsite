@@ -17,6 +17,11 @@ NO_BUILD=false
 OPENAI_API_KEY_IN="${OPENAI_API_KEY:-}"
 ELEVENLABS_API_KEY_IN="${ELEVENLABS_API_KEY:-}"
 ELEVENLABS_VOICE_ID_IN="${ELEVENLABS_VOICE_ID:-}"
+# Admin bootstrap controls
+ADMIN_USER_IN="${ADMIN_USER:-}"
+ADMIN_PASSWORD_IN="${ADMIN_PASSWORD:-}"
+# admin reset mode: no|once|always
+ADMIN_RESET_MODE="${ADMIN_RESET_MODE:-no}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +32,14 @@ while [[ $# -gt 0 ]]; do
     --elevenlabs-key) ELEVENLABS_API_KEY_IN="$2"; shift 2 ;;
     --elevenlabs-voice) ELEVENLABS_VOICE_ID_IN="$2"; shift 2 ;;
     --no-build) NO_BUILD=true; shift ;;
+    --admin-user) ADMIN_USER_IN="$2"; shift 2 ;;
+    --admin-password) ADMIN_PASSWORD_IN="$2"; shift 2 ;;
+    --admin-reset)
+      case "$2" in
+        no|once|always) ADMIN_RESET_MODE="$2" ;;
+        *) echo "--admin-reset must be one of: no|once|always" >&2; exit 1 ;;
+      esac
+      shift 2 ;;
     -h|--help)
       echo "Usage: $0 [--domain techexplore.us] [--token <cloudflare_tunnel_token>] [--openai-key <sk_...>] [--elevenlabs-key <...>] [--elevenlabs-voice <voiceId>] [--project techexplore] [--no-build]";
       exit 0 ;;
@@ -40,6 +53,17 @@ fi
 if ! docker compose version &>/dev/null; then
   echo "Docker Compose plugin is required (docker compose)" >&2; exit 1
 fi
+
+# Helper to upsert KEY=VALUE lines in .env
+set_env() {
+  local key="$1"; shift
+  local val="$1"; shift || true
+  if grep -q "^${key}=" "$DIR_ROOT/.env" 2>/dev/null; then
+    sed -i "s|^${key}=.*$|${key}=${val}|" "$DIR_ROOT/.env"
+  else
+    printf '%s=%s\n' "$key" "$val" >> "$DIR_ROOT/.env"
+  fi
+}
 
 # If .env exists, keep it; only change FRONTEND_ORIGIN if DOMAIN provided.
 if [[ ! -f "$DIR_ROOT/.env" ]]; then
@@ -70,45 +94,48 @@ fi
 
 if [[ -n "${DOMAIN}" ]]; then
   # Update or append FRONTEND_ORIGIN to https://DOMAIN
-  if grep -q '^FRONTEND_ORIGIN=' "$DIR_ROOT/.env"; then
-    sed -i "s|^FRONTEND_ORIGIN=.*$|FRONTEND_ORIGIN=https://${DOMAIN}|" "$DIR_ROOT/.env"
-  else
-    printf '\nFRONTEND_ORIGIN=https://%s\n' "$DOMAIN" >> "$DIR_ROOT/.env"
-  fi
+  set_env FRONTEND_ORIGIN "https://${DOMAIN}"
 fi
 
 # If token provided, write it into env (non-destructive append if missing)
 if [[ -n "$TOKEN" ]]; then
-  if grep -q '^CLOUDFLARE_TUNNEL_TOKEN=' "$DIR_ROOT/.env"; then
-    sed -i "s|^CLOUDFLARE_TUNNEL_TOKEN=.*$|CLOUDFLARE_TUNNEL_TOKEN=${TOKEN}|" "$DIR_ROOT/.env"
-  else
-    printf 'CLOUDFLARE_TUNNEL_TOKEN=%s\n' "$TOKEN" >> "$DIR_ROOT/.env"
-  fi
+  set_env CLOUDFLARE_TUNNEL_TOKEN "$TOKEN"
 fi
 
 # If keys provided, write them into .env (create or update)
 if [[ -n "$OPENAI_API_KEY_IN" ]]; then
-  if grep -q '^OPENAI_API_KEY=' "$DIR_ROOT/.env"; then
-    sed -i "s|^OPENAI_API_KEY=.*$|OPENAI_API_KEY=${OPENAI_API_KEY_IN}|" "$DIR_ROOT/.env"
-  else
-    printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY_IN" >> "$DIR_ROOT/.env"
-  fi
+  set_env OPENAI_API_KEY "$OPENAI_API_KEY_IN"
 fi
 
 if [[ -n "$ELEVENLABS_API_KEY_IN" ]]; then
-  if grep -q '^ELEVENLABS_API_KEY=' "$DIR_ROOT/.env"; then
-    sed -i "s|^ELEVENLABS_API_KEY=.*$|ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY_IN}|" "$DIR_ROOT/.env"
-  else
-    printf 'ELEVENLABS_API_KEY=%s\n' "$ELEVENLABS_API_KEY_IN" >> "$DIR_ROOT/.env"
-  fi
+  set_env ELEVENLABS_API_KEY "$ELEVENLABS_API_KEY_IN"
 fi
 
 if [[ -n "$ELEVENLABS_VOICE_ID_IN" ]]; then
-  if grep -q '^ELEVENLABS_VOICE_ID=' "$DIR_ROOT/.env"; then
-    sed -i "s|^ELEVENLABS_VOICE_ID=.*$|ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID_IN}|" "$DIR_ROOT/.env"
-  else
-    printf 'ELEVENLABS_VOICE_ID=%s\n' "$ELEVENLABS_VOICE_ID_IN" >> "$DIR_ROOT/.env"
+  set_env ELEVENLABS_VOICE_ID "$ELEVENLABS_VOICE_ID_IN"
+fi
+
+# --- Admin bootstrap/ensure ---
+# If admin username provided, set it; otherwise, if missing in .env, default to 'admin'.
+if [[ -n "$ADMIN_USER_IN" ]]; then
+  set_env ADMIN_USERNAMES "$ADMIN_USER_IN"
+else
+  if ! grep -q '^ADMIN_USERNAMES=' "$DIR_ROOT/.env" 2>/dev/null; then
+    set_env ADMIN_USERNAMES "admin"
   fi
+fi
+
+# If reset is requested, prepare seeding variables
+if [[ "$ADMIN_RESET_MODE" != "no" ]]; then
+  PASS_TO_USE="$ADMIN_PASSWORD_IN"
+  if [[ -z "$PASS_TO_USE" ]]; then
+    # Generate a reasonably strong password if none provided
+    PASS_TO_USE=$(openssl rand -base64 18 2>/dev/null | tr -d '\n' | tr '/+' 'AB' | cut -c1-18)
+  fi
+  set_env ADMIN_DEFAULT_PASSWORD "$PASS_TO_USE"
+  set_env ADMIN_SEED_MODE "reset"
+  set_env SEED_DB "true"
+  echo "\n[deploy] Admin reset requested (${ADMIN_RESET_MODE}). Username=$(grep '^ADMIN_USERNAMES=' "$DIR_ROOT/.env" | cut -d= -f2), Password=${PASS_TO_USE}"
 fi
 
 set -x
@@ -127,5 +154,12 @@ else
   fi
 fi
 set +x
+
+# If reset was only for this run, switch back to ensure to avoid future auto-resets
+if [[ "$ADMIN_RESET_MODE" == "once" ]]; then
+  set_env ADMIN_SEED_MODE "ensure"
+  # Optional: keep SEED_DB as-is; leaving true is harmless (ensure mode keeps password)
+  echo "[deploy] Admin reset completed; reverting ADMIN_SEED_MODE=ensure for future runs."
+fi
 
 echo "\nDeployed. If using Cloudflare Tunnel, ensure a Public Hostname techexplore.us -> http://frontend:80 is configured."
