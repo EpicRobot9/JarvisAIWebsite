@@ -22,18 +22,14 @@ export default function Markdown({ content }: Props) {
               </a>
             )
           },
-          code(codeProps) {
-            const { node, className, children, ...rest } = codeProps as any
-            const match = /language-(\w+)/.exec(className || '')
-            const raw = String(children || '')
-            // react-markdown v9 doesn't expose `inline` prop; infer by tagName
-            const isInline = (node as any)?.tagName === 'code'
-            if (isInline) {
-              return (
-                <code className="inline-code" {...rest}>{raw}</code>
-              )
-            }
-            return <CodeBlock code={raw} lang={(match && match[1]) || undefined} />
+          code(p: any) {
+            const { node, inline, className, children, ...rest } = p || {}
+            const langMatch = /language-(\w+)/.exec(String(className || ''))
+            const raw = String(children ?? '')
+            // Prefer explicit inline flag; fallback to heuristics
+            const isInline = inline ?? (!raw.includes('\n') && !langMatch)
+            if (isInline) return <code className="inline-code" {...rest}>{raw}</code>
+            return <CodeBlock code={raw} lang={(langMatch && langMatch[1]) || undefined} />
           }
         }}
       >
@@ -64,7 +60,8 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
         style={vscDarkPlus}
         customStyle={{
           margin: 0,
-          background: 'rgba(9, 18, 38, 0.7)'
+          background: 'rgba(9, 18, 38, 0.7)',
+          overflowX: 'auto'
         }}
         wrapLongLines
       >

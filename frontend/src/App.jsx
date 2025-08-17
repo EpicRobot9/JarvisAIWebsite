@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Mic, MessageSquare, LogOut, Sparkles, Palette } from 'lucide-react'
 import { useRecorder } from './hooks/useRecorder'
 import { WEBHOOK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, CALLBACK_URL, SOURCE_NAME, CHAT_INACTIVITY_RESET_MS } from './lib/config'
@@ -69,6 +69,15 @@ function ChatSheet({ open, onClose, webhookUrl }) {
     return saved
   })
   useEffect(()=> storage.set('jarvis_chat_v1', messages), [messages])
+  const scrollRef = useRef(null)
+  // Auto-scroll to newest message
+  useEffect(() => {
+    try {
+      const el = scrollRef.current
+      if (!el) return
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    } catch {}
+  }, [messages.length, open])
 
   // Only update inactivity timer when USER sends a message
   const markUserSent = () => {
@@ -260,7 +269,7 @@ function ChatSheet({ open, onClose, webhookUrl }) {
     <div className={`fixed inset-0 bg-black/40 transition ${open?'opacity-100 pointer-events-auto':'opacity-0 pointer-events-none'}`} onClick={onClose}>
       <div className="absolute right-0 top-0 h-full w-full sm:w-[460px] glass p-4 flex flex-col" onClick={e=>e.stopPropagation()}>
         <h2 className="jarvis-title mb-2">Chat</h2>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+        <div className="flex-1 overflow-y-auto space-y-2 pr-1" ref={scrollRef}>
           {messages.map((m)=> (
             <div key={m.id} className={`max-w-[85%] rounded-2xl px-4 py-2 ${m.role==='user'? 'jarvis-bubble-user ml-auto' : (m.error ? 'bg-red-900/30 border border-red-500/30' : 'jarvis-bubble-ai')}`}>
               {m.audioUrl ? (

@@ -158,6 +158,16 @@ export default function Page() {
   // Retry wiring
   const [retry, setRetry] = useState<{ label: string; fn: () => Promise<void> } | null>(null)
 
+  // Auto-scroll main chat to bottom on new messages
+  const chatScrollRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    try {
+      const el = chatScrollRef.current
+      if (!el) return
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    } catch {}
+  }, [session.messages.length])
+
   // Send typed text
   async function sendText(text: string, source: 'typed' | 'voice' = 'typed') {
     if (!text.trim()) return
@@ -371,7 +381,7 @@ export default function Page() {
 
   {/* Main chat */}
   <main className="glass rounded-2xl p-4 h-full flex flex-col overflow-hidden">
-  <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+  <div className="flex-1 overflow-y-auto space-y-2 pr-1" ref={chatScrollRef}>
           {session.messages.map(m => (
             <div key={m.id} className="flex items-start gap-2">
               {m.role === 'assistant' && (
