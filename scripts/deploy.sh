@@ -14,15 +14,21 @@ TOKEN="${CLOUDFLARE_TUNNEL_TOKEN:-}"
 PROJECT_NAME="${PROJECT_NAME:-techexplore}"
 DIR_ROOT="${DIR_ROOT:-$(pwd)}"
 NO_BUILD=false
+OPENAI_API_KEY_IN="${OPENAI_API_KEY:-}"
+ELEVENLABS_API_KEY_IN="${ELEVENLABS_API_KEY:-}"
+ELEVENLABS_VOICE_ID_IN="${ELEVENLABS_VOICE_ID:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--domain) DOMAIN="$2"; shift 2 ;;
     -t|--token) TOKEN="$2"; shift 2 ;;
     -p|--project) PROJECT_NAME="$2"; shift 2 ;;
+    --openai-key) OPENAI_API_KEY_IN="$2"; shift 2 ;;
+    --elevenlabs-key) ELEVENLABS_API_KEY_IN="$2"; shift 2 ;;
+    --elevenlabs-voice) ELEVENLABS_VOICE_ID_IN="$2"; shift 2 ;;
     --no-build) NO_BUILD=true; shift ;;
     -h|--help)
-      echo "Usage: $0 [--domain techexplore.us] [--token <cloudflare_tunnel_token>] [--project techexplore] [--no-build]";
+      echo "Usage: $0 [--domain techexplore.us] [--token <cloudflare_tunnel_token>] [--openai-key <sk_...>] [--elevenlabs-key <...>] [--elevenlabs-voice <voiceId>] [--project techexplore] [--no-build]";
       exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1;;
   esac
@@ -77,6 +83,31 @@ if [[ -n "$TOKEN" ]]; then
     sed -i "s|^CLOUDFLARE_TUNNEL_TOKEN=.*$|CLOUDFLARE_TUNNEL_TOKEN=${TOKEN}|" "$DIR_ROOT/.env"
   else
     printf 'CLOUDFLARE_TUNNEL_TOKEN=%s\n' "$TOKEN" >> "$DIR_ROOT/.env"
+  fi
+fi
+
+# If keys provided, write them into .env (create or update)
+if [[ -n "$OPENAI_API_KEY_IN" ]]; then
+  if grep -q '^OPENAI_API_KEY=' "$DIR_ROOT/.env"; then
+    sed -i "s|^OPENAI_API_KEY=.*$|OPENAI_API_KEY=${OPENAI_API_KEY_IN}|" "$DIR_ROOT/.env"
+  else
+    printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY_IN" >> "$DIR_ROOT/.env"
+  fi
+fi
+
+if [[ -n "$ELEVENLABS_API_KEY_IN" ]]; then
+  if grep -q '^ELEVENLABS_API_KEY=' "$DIR_ROOT/.env"; then
+    sed -i "s|^ELEVENLABS_API_KEY=.*$|ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY_IN}|" "$DIR_ROOT/.env"
+  else
+    printf 'ELEVENLABS_API_KEY=%s\n' "$ELEVENLABS_API_KEY_IN" >> "$DIR_ROOT/.env"
+  fi
+fi
+
+if [[ -n "$ELEVENLABS_VOICE_ID_IN" ]]; then
+  if grep -q '^ELEVENLABS_VOICE_ID=' "$DIR_ROOT/.env"; then
+    sed -i "s|^ELEVENLABS_VOICE_ID=.*$|ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID_IN}|" "$DIR_ROOT/.env"
+  else
+    printf 'ELEVENLABS_VOICE_ID=%s\n' "$ELEVENLABS_VOICE_ID_IN" >> "$DIR_ROOT/.env"
   fi
 fi
 

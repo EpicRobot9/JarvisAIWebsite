@@ -17,16 +17,22 @@ DOMAIN="${DOMAIN:-}"
 USE_TUNNEL="auto"   # auto|yes|no
 PULL=false
 NO_BUILD=false
+OPENAI_API_KEY_IN="${OPENAI_API_KEY:-}"
+ELEVENLABS_API_KEY_IN="${ELEVENLABS_API_KEY:-}"
+ELEVENLABS_VOICE_ID_IN="${ELEVENLABS_VOICE_ID:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--domain) DOMAIN="$2"; shift 2 ;;
     --use-tunnel) USE_TUNNEL="$2"; shift 2 ;;
+    --openai-key) OPENAI_API_KEY_IN="$2"; shift 2 ;;
+    --elevenlabs-key) ELEVENLABS_API_KEY_IN="$2"; shift 2 ;;
+    --elevenlabs-voice) ELEVENLABS_VOICE_ID_IN="$2"; shift 2 ;;
     --pull) PULL=true; shift ;;
     --no-build) NO_BUILD=true; shift ;;
     -p|--project) PROJECT_NAME="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--pull] [--domain techexplore.us] [--use-tunnel auto|yes|no] [--no-build] [--project techexplore]";
+      echo "Usage: $0 [--pull] [--domain techexplore.us] [--use-tunnel auto|yes|no] [--openai-key <sk_...>] [--elevenlabs-key <...>] [--elevenlabs-voice <voiceId>] [--no-build] [--project techexplore]";
       exit 0 ;;
     *) echo "Unknown arg: $1"; exit 1;;
   esac
@@ -56,6 +62,29 @@ if [[ -n "$DOMAIN" ]]; then
     sed -i "s|^FRONTEND_ORIGIN=.*$|FRONTEND_ORIGIN=https://${DOMAIN}|" .env
   else
     printf '\nFRONTEND_ORIGIN=https://%s\n' "$DOMAIN" >> .env
+  fi
+fi
+
+# Optionally inject keys
+if [[ -n "$OPENAI_API_KEY_IN" ]]; then
+  if grep -q '^OPENAI_API_KEY=' .env 2>/dev/null; then
+    sed -i "s|^OPENAI_API_KEY=.*$|OPENAI_API_KEY=${OPENAI_API_KEY_IN}|" .env
+  else
+    printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY_IN" >> .env
+  fi
+fi
+if [[ -n "$ELEVENLABS_API_KEY_IN" ]]; then
+  if grep -q '^ELEVENLABS_API_KEY=' .env 2>/dev/null; then
+    sed -i "s|^ELEVENLABS_API_KEY=.*$|ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY_IN}|" .env
+  else
+    printf 'ELEVENLABS_API_KEY=%s\n' "$ELEVENLABS_API_KEY_IN" >> .env
+  fi
+fi
+if [[ -n "$ELEVENLABS_VOICE_ID_IN" ]]; then
+  if grep -q '^ELEVENLABS_VOICE_ID=' .env 2>/dev/null; then
+    sed -i "s|^ELEVENLABS_VOICE_ID=.*$|ELEVENLABS_VOICE_ID=${ELEVENLABS_VOICE_ID_IN}|" .env
+  else
+    printf 'ELEVENLABS_VOICE_ID=%s\n' "$ELEVENLABS_VOICE_ID_IN" >> .env
   fi
 fi
 
