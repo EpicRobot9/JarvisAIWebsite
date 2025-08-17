@@ -268,8 +268,17 @@ function ChatSheet({ open, onClose, webhookUrl }) {
                   Your browser does not support the audio element.
                 </audio>
               ) : (
-                <div className="text-sm whitespace-pre-wrap flex items-center gap-2">
-                  <span>{m.content || (m.pending ? '' : '')}</span>
+                <div className="text-sm flex items-center gap-2">
+                  <span className="flex-1">
+                    {m.role==='assistant' ? (
+                      <>
+                        {/** Render Markdown so links become clickable and styled */}
+                        {React.createElement(require('./components/ui/Markdown').default, { content: m.content || '' })}
+                      </>
+                    ) : (
+                      <span className="whitespace-pre-wrap">{m.content || (m.pending ? '' : '')}</span>
+                    )}
+                  </span>
                   {m.pending && (
                     <span className="inline-block w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" aria-label="Loading" />
                   )}

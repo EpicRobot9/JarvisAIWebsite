@@ -14,6 +14,14 @@ export default function Markdown({ content }: Props) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          a({ href, children, ...rest }) {
+            const url = String(href || '')
+            return (
+              <a href={url} target="_blank" rel="noopener noreferrer" className="jarvis-link" {...rest}>
+                {children}
+              </a>
+            )
+          },
           code(codeProps) {
             const { node, className, children, ...rest } = codeProps as any
             const match = /language-(\w+)/.exec(className || '')

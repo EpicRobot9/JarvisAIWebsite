@@ -172,3 +172,19 @@ body {
 	border-radius: 0.375rem;
 	padding: 0.15rem 0.5rem;
 }
+
+/* Highlighted links inside Markdown */
+.markdown a.jarvis-link {
+	color: var(--jarvis-cyan);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	font-weight: 600;
+	background: linear-gradient(180deg, rgba(93,232,255,0.12), rgba(93,232,255,0.18));
+	border: 1px solid rgba(93,232,255,0.25);
+	padding: 0.1rem 0.3rem;
+	border-radius: 0.375rem;
+	box-shadow: 0 0 0 1px rgba(93,232,255,0.12) inset;
+}
+.markdown a.jarvis-link:hover {
+	filter: brightness(1.08);
+}

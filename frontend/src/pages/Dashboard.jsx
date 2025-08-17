@@ -171,8 +171,14 @@ function ChatSheet({ open, onClose, user, onDebug }) {
                   Your browser does not support the audio element.
                 </audio>
               ) : (
-                <div className="text-sm whitespace-pre-wrap">
-                  {m.content}{m.error ? ' (timed out)' : ''}
+                <div className="text-sm">
+                  {m.role==='assistant' ? (
+                    <>
+                      {React.createElement(require('../components/ui/Markdown').default, { content: (m.content || '') + (m.error ? ' (timed out)' : '') })}
+                    </>
+                  ) : (
+                    <span className="whitespace-pre-wrap">{m.content}{m.error ? ' (timed out)' : ''}</span>
+                  )}
                   {m.ack && (
                     <div className="mt-2 flex items-center gap-2 text-xs">
                       {m.error && (
