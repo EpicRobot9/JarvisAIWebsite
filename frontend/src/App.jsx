@@ -308,7 +308,29 @@ export default function App() {
   const rec = useRecorder()
   const [theme, setTheme] = useState(() => localStorage.getItem('jarvis_theme') || 'theme-blue')
   const [useTest, setUseTest] = useState(() => storage.get('jarvis_use_test_url', false))
-  const currentWebhookUrl = useTest ? TEST_WEBHOOK_URL : PROD_WEBHOOK_URL
+  const [dynamicUrls, setDynamicUrls] = useState({ prod: '', test: '' })
+  const currentWebhookUrl = (useTest ? (dynamicUrls.test || TEST_WEBHOOK_URL) : (dynamicUrls.prod || PROD_WEBHOOK_URL))
+  useEffect(()=>{
+    (async()=>{
+      try {
+        // Prefer local cache first to avoid flicker
+        const cached = {
+          prod: localStorage.getItem('jarvis_webhook_prod') || '',
+          test: localStorage.getItem('jarvis_webhook_test') || ''
+        }
+        if (cached.prod || cached.test) setDynamicUrls(cached)
+        const r = await fetch('/api/webhook-urls', { cache: 'no-store' }).catch(()=>null)
+        if (r?.ok) {
+          const data = await r.json()
+          setDynamicUrls({ prod: data.prod || '', test: data.test || '' })
+          try {
+            localStorage.setItem('jarvis_webhook_prod', data.prod || '')
+            localStorage.setItem('jarvis_webhook_test', data.test || '')
+          } catch {}
+        }
+      } catch {}
+    })()
+  }, [])
   useEffect(()=>{
     localStorage.setItem('jarvis_theme', theme)
     // Also toggle Tailwind's dark class

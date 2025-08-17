@@ -6,7 +6,28 @@ import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '.
 export type CallState = 'idle' | 'listening' | 'processing' | 'speaking'
 
 export function useCallSession(opts: { userId: string | undefined; sessionId: string; useTestWebhook?: boolean; onTranscript?: (t: string)=>void; onReply?: (t: string)=>void; setStatus?: (s: string)=>void }) {
-  const currentWebhookUrl = (opts.useTestWebhook ? TEST_WEBHOOK_URL : PROD_WEBHOOK_URL)
+  const [urls, setUrls] = useState<{ prod: string; test: string }>({ prod: '', test: '' })
+  const currentWebhookUrl = opts.useTestWebhook ? (urls.test || TEST_WEBHOOK_URL) : (urls.prod || PROD_WEBHOOK_URL)
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const cached = {
+          prod: localStorage.getItem('jarvis_webhook_prod') || '',
+          test: localStorage.getItem('jarvis_webhook_test') || ''
+        }
+        if (cached.prod || cached.test) setUrls(cached)
+        const r = await fetch('/api/webhook-urls', { cache: 'no-store' }).catch(()=>null)
+        if (r?.ok) {
+          const data = await r.json()
+          setUrls({ prod: data.prod || '', test: data.test || '' })
+          try {
+            localStorage.setItem('jarvis_webhook_prod', data.prod || '')
+            localStorage.setItem('jarvis_webhook_test', data.test || '')
+          } catch {}
+        }
+      } catch {}
+    })()
+  }, [])
   const [state, setState] = useState<CallState>('idle')
   const [error, setError] = useState<AppError | null>(null)
   const mediaRef = useRef<MediaStream | null>(null)

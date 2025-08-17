@@ -21,6 +21,15 @@ The frontend webhook payload includes:
 ```
 
 ## A) Immediate reply (optional)
+Admin-configurable webhook URLs
+
+You can set the Prod and Test webhook URLs from the Admin Panel:
+- Go to Admin → “n8n Webhook URLs”
+- Enter full HTTPS URLs for your Prod and Test flows
+- Click “Save URLs”
+
+The Portal UI and Call Mode read these at runtime and cache them locally, so switching environments doesn’t require a rebuild.
+
 Your Webhook node can respond with a string or JSON; the UI will render it. Example JSON body:
 
 ```json

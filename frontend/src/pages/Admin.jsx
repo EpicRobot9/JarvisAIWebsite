@@ -20,6 +20,9 @@ export default function Admin() {
   const [selectedLog, setSelectedLog] = useState(null)
   const [live, setLive] = useState(false)
   const [testing, setTesting] = useState(false)
+  const [webhookUrls, setWebhookUrls] = useState({ prod: '', test: '' })
+  const [savingWebhook, setSavingWebhook] = useState(false)
+  const [savedWebhook, setSavedWebhook] = useState(false)
 
   useEffect(() => {
     ;(async () => {
@@ -36,6 +39,8 @@ export default function Admin() {
   if (s.ok) setSettings(await s.json())
         const k = await fetch('/api/admin/keys', { credentials: 'include', cache: 'no-store' }).catch(()=>null)
         if (k?.ok) setKeys(await k.json())
+  const wu = await fetch('/api/admin/webhook-urls', { credentials: 'include', cache: 'no-store' }).catch(()=>null)
+  if (wu?.ok) setWebhookUrls(await wu.json())
         // Load settings and users
         const u = await fetch('/api/admin/users', { credentials: 'include' })
         if (!u.ok) throw new Error(`Failed to load users: ${u.status}`)
@@ -67,6 +72,34 @@ export default function Admin() {
     await fetch('/api/admin/approve', { method: 'POST', headers: {'Content-Type':'application/json'}, credentials: 'include', body: JSON.stringify({ userId }) })
     setPending(p => p.filter(u => u.id !== userId))
     setUsers(u => u.map(x => x.id===userId ? { ...x, status: 'active' } : x))
+  }
+
+  async function saveWebhookUrls() {
+    try {
+      setSavingWebhook(true)
+      setSavedWebhook(false)
+      const body = { prod: (webhookUrls.prod || '').trim(), test: (webhookUrls.test || '').trim() }
+      const r = await fetch('/api/admin/webhook-urls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body)
+      })
+      if (!r.ok) throw new Error('Failed to save webhook URLs')
+      const data = await r.json()
+      setWebhookUrls({ prod: data.prod || '', test: data.test || '' })
+      // Update local cache so the UI picks up immediately in this browser
+      try {
+        localStorage.setItem('jarvis_webhook_prod', data.prod || '')
+        localStorage.setItem('jarvis_webhook_test', data.test || '')
+      } catch {}
+      setSavedWebhook(true)
+      setTimeout(()=> setSavedWebhook(false), 1500)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSavingWebhook(false)
+    }
   }
   async function deny(userId) {
     await fetch('/api/admin/deny', { method: 'POST', headers: {'Content-Type':'application/json'}, credentials: 'include', body: JSON.stringify({ userId }) })
@@ -270,6 +303,47 @@ export default function Admin() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+          {/* n8n Webhook URLs */}
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-2 text-cyan-300">n8n Webhook URLs</h2>
+            <div className="grid md:grid-cols-2 gap-3">
+              <div className="p-3 rounded-xl border border-cyan-200/20">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="font-medium">Prod webhook URL</div>
+                    <div className="text-xs jarvis-subtle">Used when Webhook toggle is set to Prod in the UI/call flows.</div>
+                    <input
+                      type="url"
+                      className="mt-2 w-full px-2 py-1 rounded bg-black/20 border border-cyan-200/20 font-mono text-xs"
+                      placeholder="https://n8n.example.com/webhook/your-flow"
+                      value={webhookUrls.prod}
+                      onChange={e=>setWebhookUrls(v=>({...v, prod: e.target.value}))}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="p-3 rounded-xl border border-cyan-200/20">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="font-medium">Test webhook URL</div>
+                    <div className="text-xs jarvis-subtle">Used when Webhook toggle is set to Test in the UI/call flows.</div>
+                    <input
+                      type="url"
+                      className="mt-2 w-full px-2 py-1 rounded bg-black/20 border border-cyan-200/20 font-mono text-xs"
+                      placeholder="https://n8n.example.com/webhook-test/your-flow"
+                      value={webhookUrls.test}
+                      onChange={e=>setWebhookUrls(v=>({...v, test: e.target.value}))}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button className="px-3 py-1 rounded-xl border border-cyan-200/20 disabled:opacity-50" disabled={savingWebhook} onClick={saveWebhookUrls}>Save URLs</button>
+              {savingWebhook && <span className="text-xs jarvis-subtle">Saving…</span>}
+              {savedWebhook && <span className="text-xs text-green-400">Saved</span>}
             </div>
           </div>
           <div className="mb-4">

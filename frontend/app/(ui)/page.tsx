@@ -27,7 +27,8 @@ export default function Page() {
   const [useTestWebhook, setUseTestWebhook] = useState<boolean>(() => {
     try { return JSON.parse(localStorage.getItem('jarvis_use_test_url') || 'false') } catch { return false }
   })
-  const currentWebhookUrl = useTestWebhook ? TEST_WEBHOOK_URL : PROD_WEBHOOK_URL
+  const [dynamicUrls, setDynamicUrls] = useState<{ prod: string; test: string }>({ prod: '', test: '' })
+  const currentWebhookUrl = useTestWebhook ? (dynamicUrls.test || TEST_WEBHOOK_URL) : (dynamicUrls.prod || PROD_WEBHOOK_URL)
   useEffect(()=>{ try { localStorage.setItem('jarvis_use_test_url', JSON.stringify(useTestWebhook)) } catch {} }, [useTestWebhook])
   const lastBlobRef = useRef<Blob | null>(null)
   const lastTextRef = useRef<string>('')
@@ -48,6 +49,28 @@ export default function Page() {
   ;(window as any).__jarvis_user_id = m?.id
       } catch { setMe(null) }
       finally { setLoadingMe(false) }
+    })()
+  }, [])
+
+  // Fetch dynamic webhook URLs
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const cached = {
+          prod: localStorage.getItem('jarvis_webhook_prod') || '',
+          test: localStorage.getItem('jarvis_webhook_test') || ''
+        }
+        if (cached.prod || cached.test) setDynamicUrls(cached)
+        const r = await fetch('/api/webhook-urls', { cache: 'no-store' }).catch(()=>null)
+        if (r?.ok) {
+          const data = await r.json()
+          setDynamicUrls({ prod: data.prod || '', test: data.test || '' })
+          try {
+            localStorage.setItem('jarvis_webhook_prod', data.prod || '')
+            localStorage.setItem('jarvis_webhook_test', data.test || '')
+          } catch {}
+        }
+      } catch {}
     })()
   }, [])
 

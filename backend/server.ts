@@ -461,6 +461,43 @@ app.post('/api/admin/keys', requireAuth, requireAdmin, async (req, res) => {
   })
 })
 
+// Webhook URL settings (n8n) — public read, admin write
+app.get('/api/webhook-urls', async (req, res) => {
+  try {
+    const prod = await getSettingValue('WEBHOOK_URL_PROD')
+    const test = await getSettingValue('WEBHOOK_URL_TEST')
+    res.json({ prod: prod || '', test: test || '' })
+  } catch {
+    res.status(500).json({ error: 'read_failed' })
+  }
+})
+app.get('/api/admin/webhook-urls', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const prod = await getSettingValue('WEBHOOK_URL_PROD')
+    const test = await getSettingValue('WEBHOOK_URL_TEST')
+    res.json({ prod: prod || '', test: test || '' })
+  } catch {
+    res.status(500).json({ error: 'read_failed' })
+  }
+})
+app.post('/api/admin/webhook-urls', requireAuth, requireAdmin, async (req, res) => {
+  const v = z.object({
+    prod: z.string().trim().url().or(z.literal('')).optional(),
+    test: z.string().trim().url().or(z.literal('')).optional(),
+  }).safeParse(req.body || {})
+  if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
+  const { prod, test } = v.data
+  try {
+    if (prod !== undefined) await setSettingValue('WEBHOOK_URL_PROD', prod || null)
+    if (test !== undefined) await setSettingValue('WEBHOOK_URL_TEST', test || null)
+    const newProd = await getSettingValue('WEBHOOK_URL_PROD')
+    const newTest = await getSettingValue('WEBHOOK_URL_TEST')
+    res.json({ ok: true, prod: newProd || '', test: newTest || '' })
+  } catch (e) {
+    res.status(500).json({ error: 'save_failed', detail: String(e) })
+  }
+})
+
 // Admin: users listing
 app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   // Temporary: cast to any for username select until Prisma types include username
