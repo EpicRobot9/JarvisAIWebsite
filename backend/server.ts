@@ -46,7 +46,18 @@ async function sessionMiddleware(req: any, res: any, next: any) {
 app.use(sessionMiddleware)
 
 // Observability: safe serialization and sanitizer
-const REDACT_KEYS = new Set(['password','newPassword','authorization','cookie','set-cookie','xi-api-key','x-openai-key'])
+const REDACT_KEYS = new Set([
+  'password',
+  'newpassword',
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'xi-api-key',
+  'x-openai-key',
+  // Admin settings fields for provider secrets
+  'openai_api_key',
+  'elevenlabs_api_key',
+])
 function redact(obj: any): any {
   try {
     if (!obj || typeof obj !== 'object') return obj
@@ -255,6 +266,35 @@ async function setFlag(key: FlagKey, value: string): Promise<void> {
   settingsCache.set(key, value)
 }
 
+// Generic settings helpers for secrets and other values (cached)
+const kvCache = new Map<string, string>()
+async function getSettingValue(key: string): Promise<string | undefined> {
+  if (kvCache.has(key)) return kvCache.get(key)
+  try {
+    const s = await (prisma as any).setting.findUnique({ where: { key } })
+    if (s?.value != null) kvCache.set(key, s.value)
+    return s?.value ?? undefined
+  } catch {
+    return undefined
+  }
+}
+async function setSettingValue(key: string, value: string | null | undefined): Promise<void> {
+  // null/undefined clears the key
+  if (value == null || value === '') {
+    try { await (prisma as any).setting.delete({ where: { key } }) } catch {}
+    kvCache.delete(key)
+    return
+  }
+  await (prisma as any).setting.upsert({ where: { key }, update: { value }, create: { key, value } })
+  kvCache.set(key, value)
+}
+function maskKey(k: string | undefined | null): string | null {
+  if (!k) return null
+  const len = k.length
+  if (len <= 6) return '*'.repeat(Math.max(3, len))
+  return `${k.slice(0, 3)}***${k.slice(-4)}`
+}
+
 // Rate limit auth
 const authLimiter = rateLimit({ windowMs: 60_000, max: 30 })
 // Rate limit token-based integration pushes per-IP
@@ -359,6 +399,36 @@ app.post('/api/admin/settings', requireAuth, requireAdmin, async (req, res) => {
   res.json({ ok: true, settings: current })
 })
 
+// Admin: provider keys (OpenAI, ElevenLabs)
+app.get('/api/admin/keys', requireAuth, requireAdmin, async (req, res) => {
+  const openaiDb = await getSettingValue('OPENAI_API_KEY')
+  const elevenDb = await getSettingValue('ELEVENLABS_API_KEY')
+  const openai = openaiDb || process.env.OPENAI_API_KEY || ''
+  const eleven = elevenDb || process.env.ELEVENLABS_API_KEY || ''
+  res.json({
+    OPENAI_API_KEY: { has: !!openai, preview: maskKey(openai) },
+    ELEVENLABS_API_KEY: { has: !!eleven, preview: maskKey(eleven) },
+  })
+})
+app.post('/api/admin/keys', requireAuth, requireAdmin, async (req, res) => {
+  const body = req.body || {}
+  // Note: request/response bodies are masked by REDACT_KEYS to avoid logging secrets
+  const upd: Record<string, string | null | undefined> = {}
+  if ('OPENAI_API_KEY' in body) upd.OPENAI_API_KEY = typeof body.OPENAI_API_KEY === 'string' ? body.OPENAI_API_KEY.trim() : null
+  if ('ELEVENLABS_API_KEY' in body) upd.ELEVENLABS_API_KEY = typeof body.ELEVENLABS_API_KEY === 'string' ? body.ELEVENLABS_API_KEY.trim() : null
+  await setSettingValue('OPENAI_API_KEY', upd.OPENAI_API_KEY ?? undefined)
+  await setSettingValue('ELEVENLABS_API_KEY', upd.ELEVENLABS_API_KEY ?? undefined)
+  const openaiDb = await getSettingValue('OPENAI_API_KEY')
+  const elevenDb = await getSettingValue('ELEVENLABS_API_KEY')
+  res.json({
+    ok: true,
+    keys: {
+      OPENAI_API_KEY: { has: !!(openaiDb || process.env.OPENAI_API_KEY), preview: maskKey(openaiDb || process.env.OPENAI_API_KEY || '') },
+      ELEVENLABS_API_KEY: { has: !!(elevenDb || process.env.ELEVENLABS_API_KEY), preview: maskKey(elevenDb || process.env.ELEVENLABS_API_KEY || '') },
+    }
+  })
+})
+
 // Admin: users listing
 app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   const users = await prisma.user.findMany({
@@ -454,7 +524,7 @@ app.post('/api/admin/reset-password', requireAuth, requireAdmin, async (req: any
 })
 
 // Transcription route
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const openaiEnvClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 app.post('/api/transcribe', requireAuth, upload.single('file'), async (req: any, res) => {
   try {
     const file = req.file
@@ -463,7 +533,12 @@ app.post('/api/transcribe', requireAuth, upload.single('file'), async (req: any,
 
     // Use Whisper or gpt-4o-mini-transcribe
     const mode = process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe'
-    const transcript = await openai.audio.transcriptions.create({
+  const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+  const dbKey = await getSettingValue('OPENAI_API_KEY')
+  const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+  if (!apiKey) return res.status(400).json({ error: 'stt_not_configured' })
+  const oaClient = new OpenAI({ apiKey })
+  const transcript = await oaClient.audio.transcriptions.create({
       file: await toFile(Buffer.from(file.buffer), file.originalname, { type: file.mimetype }),
       model: mode,
     })
@@ -481,16 +556,17 @@ app.post('/api/stt', requireAuth, upload.single('audio'), async (req: any, res) 
     const file = req.file
     if (!file) return res.status(400).json({ error: 'missing_audio' })
     const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
-    if (!process.env.OPENAI_API_KEY && !headerKey) return res.status(400).json({ error: 'stt_not_configured' })
+      const dbKey = await getSettingValue('OPENAI_API_KEY')
+      if (!process.env.OPENAI_API_KEY && !dbKey && !headerKey) return res.status(400).json({ error: 'stt_not_configured' })
 
-  const preferred = (process.env.TRANSCRIBE_MODEL || process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe').trim()
+    const preferred = (process.env.TRANSCRIBE_MODEL || process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe').trim()
     // Provide a resilient fallback order
     const candidates = Array.from(new Set([
       preferred,
       preferred === 'whisper-1' ? 'gpt-4o-mini-transcribe' : 'whisper-1',
     ]))
 
-    const oa = headerKey ? new OpenAI({ apiKey: headerKey }) : openai
+  const oa = new OpenAI({ apiKey: headerKey || dbKey || process.env.OPENAI_API_KEY! })
     const fileInput = await toFile(Buffer.from(file.buffer), file.originalname || 'audio.webm', { type: file.mimetype || 'audio/webm' })
 
     let lastErr: any = null
@@ -574,7 +650,8 @@ app.post('/api/tts', requireAuth, async (req: any, res) => {
   try {
     const { text } = req.body || {}
   const headerKey = (req.headers['x-elevenlabs-key'] as string | undefined)?.trim()
-  const apiKey = headerKey || process.env.ELEVENLABS_API_KEY
+  const dbKey = await getSettingValue('ELEVENLABS_API_KEY')
+  const apiKey = headerKey || dbKey || process.env.ELEVENLABS_API_KEY
   // Default voice for project key (overridable by env)
   const defaultVoice = process.env.ELEVENLABS_VOICE_ID || '7dxS4V4NqL8xqL4PSiMp'
   // Allow end-users to supply a voice id only when using their own key
@@ -611,7 +688,8 @@ app.get('/api/tts/stream', requireAuth, async (req: any, res) => {
     const text = (req.query.text as string || '').toString()
     const headerKey = (req.headers['x-elevenlabs-key'] as string | undefined)?.trim()
     const queryKey = (req.query.key as string | undefined)?.trim()
-    const apiKey = headerKey || queryKey || process.env.ELEVENLABS_API_KEY
+  const dbKey = await getSettingValue('ELEVENLABS_API_KEY')
+  const apiKey = headerKey || queryKey || dbKey || process.env.ELEVENLABS_API_KEY
     const defaultVoice = process.env.ELEVENLABS_VOICE_ID || '7dxS4V4NqL8xqL4PSiMp'
     const userVoice = (req.query.voiceId as string | undefined)?.trim()
     const voiceId = (queryKey || headerKey) && userVoice ? userVoice : defaultVoice

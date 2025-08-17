@@ -8,6 +8,10 @@ export default function Admin() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [settings, setSettings] = useState({ REQUIRE_ADMIN_APPROVAL: false, LOCK_NEW_ACCOUNTS: false })
+  const [keys, setKeys] = useState({ OPENAI_API_KEY: { has: false, preview: null }, ELEVENLABS_API_KEY: { has: false, preview: null } })
+  const [editKey, setEditKey] = useState(null) // 'openai' | 'eleven' | null
+  const [keyInputs, setKeyInputs] = useState({ openai: '', eleven: '' })
+  const [savingKeys, setSavingKeys] = useState(false)
   const [savingKey, setSavingKey] = useState(null)
   const [savedKey, setSavedKey] = useState(null)
   const [pending, setPending] = useState([])
@@ -30,6 +34,8 @@ export default function Admin() {
         }
   const s = await fetch('/api/admin/settings', { credentials: 'include' })
   if (s.ok) setSettings(await s.json())
+        const k = await fetch('/api/admin/keys', { credentials: 'include', cache: 'no-store' }).catch(()=>null)
+        if (k?.ok) setKeys(await k.json())
         // Load settings and users
         const u = await fetch('/api/admin/users', { credentials: 'include' })
         if (!u.ok) throw new Error(`Failed to load users: ${u.status}`)
@@ -132,6 +138,28 @@ export default function Admin() {
     finally { setSavingKey(null) }
   }
 
+  async function saveProviderKeys(action) {
+    try {
+      setSavingKeys(true)
+      const body = {}
+      if (action === 'clear-openai') body.OPENAI_API_KEY = ''
+      if (action === 'clear-eleven') body.ELEVENLABS_API_KEY = ''
+      if (action === 'save-openai' && keyInputs.openai.trim()) body.OPENAI_API_KEY = keyInputs.openai.trim()
+      if (action === 'save-eleven' && keyInputs.eleven.trim()) body.ELEVENLABS_API_KEY = keyInputs.eleven.trim()
+      if (Object.keys(body).length === 0) return
+      const r = await fetch('/api/admin/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })
+      if (!r.ok) throw new Error('Failed to update keys')
+      const data = await r.json().catch(()=>null)
+      if (data?.keys) setKeys(data.keys)
+      setEditKey(null)
+      setKeyInputs({ openai: '', eleven: '' })
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSavingKeys(false)
+    }
+  }
+
   async function testPush(kind) {
     try {
       setTesting(true)
@@ -174,6 +202,76 @@ export default function Admin() {
       {error && <div className="text-red-400 text-sm mb-2">{error}</div>}
       {!loading && !error && (
   <div className="glass rounded-2xl p-4">
+          {/* Provider Keys */}
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold mb-2 text-cyan-300">Provider Keys</h2>
+            <div className="grid md:grid-cols-2 gap-3">
+              <div className="p-3 rounded-xl border border-cyan-200/20">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium">OpenAI API key</div>
+                    <div className="text-xs jarvis-subtle">Used for STT/transcription by default. Per-request override via X-OpenAI-Key.</div>
+                    <div className="mt-1 text-xs">Current: <span className="font-mono">{keys.OPENAI_API_KEY.preview || '—'}</span></div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2 min-w-[180px]">
+                    {editKey === 'openai' ? (
+                      <div className="w-full">
+                        <input
+                          type="password"
+                          className="w-full px-2 py-1 rounded bg-black/20 border border-cyan-200/20"
+                          placeholder="sk-..."
+                          value={keyInputs.openai}
+                          onChange={e=>setKeyInputs(v=>({...v, openai: e.target.value}))}
+                        />
+                        <div className="flex gap-2 mt-2 justify-end">
+                          <button disabled={savingKeys || !keyInputs.openai.trim()} onClick={()=>saveProviderKeys('save-openai')} className="px-3 py-1 rounded-xl border border-cyan-200/20 disabled:opacity-50">Save</button>
+                          <button onClick={()=>{setEditKey(null); setKeyInputs(v=>({...v, openai: ''}))}} className="px-3 py-1 rounded-xl border border-cyan-200/20">Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button onClick={()=>setEditKey('openai')} className="px-3 py-1 rounded-xl border border-cyan-200/20">Edit</button>
+                        <button disabled={savingKeys || !keys.OPENAI_API_KEY.has} onClick={()=>saveProviderKeys('clear-openai')} className="px-3 py-1 rounded-xl border border-red-400/30 text-red-300 disabled:opacity-50">Clear</button>
+                      </div>
+                    )}
+                    {savingKeys && <span className="text-xs jarvis-subtle">Saving…</span>}
+                  </div>
+                </div>
+              </div>
+              <div className="p-3 rounded-xl border border-cyan-200/20">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium">ElevenLabs API key</div>
+                    <div className="text-xs jarvis-subtle">Used for TTS by default. Per-request override via X-ElevenLabs-Key.</div>
+                    <div className="mt-1 text-xs">Current: <span className="font-mono">{keys.ELEVENLABS_API_KEY.preview || '—'}</span></div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2 min-w-[180px]">
+                    {editKey === 'eleven' ? (
+                      <div className="w-full">
+                        <input
+                          type="password"
+                          className="w-full px-2 py-1 rounded bg-black/20 border border-cyan-200/20"
+                          placeholder="elevenlabs_..."
+                          value={keyInputs.eleven}
+                          onChange={e=>setKeyInputs(v=>({...v, eleven: e.target.value}))}
+                        />
+                        <div className="flex gap-2 mt-2 justify-end">
+                          <button disabled={savingKeys || !keyInputs.eleven.trim()} onClick={()=>saveProviderKeys('save-eleven')} className="px-3 py-1 rounded-xl border border-cyan-200/20 disabled:opacity-50">Save</button>
+                          <button onClick={()=>{setEditKey(null); setKeyInputs(v=>({...v, eleven: ''}))}} className="px-3 py-1 rounded-xl border border-cyan-200/20">Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button onClick={()=>setEditKey('eleven')} className="px-3 py-1 rounded-xl border border-cyan-200/20">Edit</button>
+                        <button disabled={savingKeys || !keys.ELEVENLABS_API_KEY.has} onClick={()=>saveProviderKeys('clear-eleven')} className="px-3 py-1 rounded-xl border border-red-400/30 text-red-300 disabled:opacity-50">Clear</button>
+                      </div>
+                    )}
+                    {savingKeys && <span className="text-xs jarvis-subtle">Saving…</span>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div className="mb-4">
             <h2 className="text-lg font-semibold mb-2 text-cyan-300">Signup Controls</h2>
             <div className="grid md:grid-cols-2 gap-3">
