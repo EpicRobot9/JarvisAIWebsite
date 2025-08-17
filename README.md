@@ -73,8 +73,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/EpicRobot9/JarvisAIWebsite/m
 - Default admin (development):
 	- Username: `admin`
 	- Password: `changeme` (override with `ADMIN_DEFAULT_PASSWORD`)
-	- This user is created automatically when `SEED_DB=true` (enabled in docker-compose) and `ADMIN_USERNAMES` includes `admin` (the compose file sets a default).
+	- This user is ensured automatically when `SEED_DB=true` (enabled in docker-compose). You can set `ADMIN_USERNAMES` to a comma‑separated list; default includes `admin`.
 	- If the user already exists, the seeder will set the role to admin, mark status active, and reset the password to the default.
+	- Password behavior: `ADMIN_SEED_MODE=ensure` (default) keeps existing passwords; set `ADMIN_SEED_MODE=reset` to force resetting to `ADMIN_DEFAULT_PASSWORD`.
 	- Change the password immediately in production.
 - Backward compatibility: you can still specify `ADMIN_EMAILS` to bootstrap admins from email addresses; the seeder will treat them as usernames if `ADMIN_USERNAMES` isn’t set.
 - Sign in at `/signin`.

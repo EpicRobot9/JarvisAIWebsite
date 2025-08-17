@@ -14,6 +14,7 @@ Root `.env` variables (used by docker-compose):
 - ADMIN_EMAILS=
 - ADMIN_USERNAMES=admin  # preferred for seeding admin(s); defaults to 'admin' in docker-compose
 - SEED_DB=true
+ - ADMIN_SEED_MODE=ensure  # ensure: keep existing password; reset: overwrite to ADMIN_DEFAULT_PASSWORD
 - VITE_WEBHOOK_URL=... (frontend prod webhook)
 - VITE_WEBHOOK_TEST_URL=... (frontend test webhook)
 - VITE_CALLBACK_URL=/api/jarvis/callback (frontend)
