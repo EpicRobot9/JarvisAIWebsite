@@ -38,6 +38,35 @@ Verify the webhook wiring
 
 See also: `docs/N8N.md` for detailed n8n HTTP Request node examples (push/push-voice/call-end and callback). During calls, you should see two TTS requests when sending a voice push alongside the webhook reply (one for each message).
 
+## Production deployment
+
+- Target: Hostinger VPS (Ubuntu 24.04) + Cloudflare domain
+- Domain used in this project: https://techexplore.us
+
+Recommended path: Cloudflare Tunnel for zero‑downtime and no port conflicts with existing apps.
+
+Docs:
+- Step‑by‑step guide: `docs/DEPLOYMENT.md`
+- Environment reference: `docs/ENV.md`
+
+Quick commands (from the repo root on the VPS):
+
+```
+# internal-only services, no host ports
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+# add Cloudflare Tunnel (set CLOUDFLARE_TUNNEL_TOKEN in .env first)
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.tunnel.yml up -d --build
+```
+
+With the tunnel active and a Public Hostname configured to `http://frontend:80`, the site is served securely at `https://techexplore.us` without changing other containers on the VPS.
+
+One‑liner installer (keeps your .env as‑is except `FRONTEND_ORIGIN` when domain is provided):
+
+```
+bash <(curl -fsSL https://raw.githubusercontent.com/EpicRobot9/JarvisAIWebsite/main/scripts/install.sh) --domain techexplore.us --token <CLOUDFLARE_TUNNEL_TOKEN>
+```
+
 ## Accounts
 
 - Sign up at `/signup`. If `REQUIRE_ADMIN_APPROVAL=true`, new users start as pending; an admin must approve (admin tools live in the API; the standalone Dashboard has been removed in favor of the main Portal).

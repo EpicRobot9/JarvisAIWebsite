@@ -1,0 +1,11 @@
+services:
+  db:
+    ports: []
+    restart: unless-stopped
+
+  backend:
+    restart: unless-stopped
+
+  frontend:
+    ports: []
+    restart: unless-stopped
