@@ -5,7 +5,7 @@ import SettingsPanel from '../../src/components/SettingsPanel'
 import ErrorToast from '../../src/components/ErrorToast'
 import ErrorCard from '../../src/components/ErrorCard'
 import { AppError, sendToRouter, sendToWebhook, synthesizeTTS, transcribeAudio, getTtsStreamUrl } from '../../src/lib/api'
-import { stopAudio, cacheTts, hasCachedTts, playCachedTts, isPlayingMessage, playAudioBufferForMessage, enqueueStreamUrl, enqueueAudioBuffer, setOnQueueIdleListener } from '../../src/lib/audio'
+import { stopAudio, cacheTts, hasCachedTts, playCachedTts, isPlayingMessage, playAudioBufferForMessage, enqueueStreamUrl, enqueueAudioBuffer, setOnQueueIdleListener, installAutoplayUnlocker, primeAudio, isAudioReady } from '../../src/lib/audio'
 import { useEventChannel } from '../../src/lib/events'
 import { useSession } from '../../src/lib/session'
 import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '../../src/lib/config'
@@ -35,6 +35,7 @@ export default function Page() {
   const lastAssistantIdRef = useRef<string>('')
   const [callSummary, setCallSummary] = useState<string>('')
   const [ttsLoading, setTtsLoading] = useState<Set<string>>(new Set())
+  const [audioReady, setAudioReady] = useState<boolean>(false)
 
   // Fetch current user
   useEffect(() => {
@@ -48,6 +49,21 @@ export default function Page() {
       } catch { setMe(null) }
       finally { setLoadingMe(false) }
     })()
+  }, [])
+
+  // Ensure AudioContext is resumed on first interaction for autoplay reliability
+  useEffect(() => {
+    installAutoplayUnlocker()
+    setAudioReady(isAudioReady())
+    const onAny = () => setAudioReady(isAudioReady())
+    document.addEventListener('click', onAny)
+    document.addEventListener('keydown', onAny)
+    document.addEventListener('touchstart', onAny)
+    return ()=>{
+      document.removeEventListener('click', onAny)
+      document.removeEventListener('keydown', onAny)
+      document.removeEventListener('touchstart', onAny)
+    }
   }, [])
 
   // Event channel: push/push-voice/call-end with delegated speaking
@@ -90,7 +106,8 @@ export default function Page() {
           } catch (e2) {
             const err = AppError.from(e2)
             session.setError(err)
-            setToast(err.message)
+            setToast(err.message || 'Audio playback failed. Click anywhere to enable audio and try again.')
+            throw e2
           }
         }
         return
@@ -273,6 +290,15 @@ export default function Page() {
 
   return (
     <div className="h-screen relative p-4">
+      {!audioReady && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 glass px-3 py-2 rounded-xl text-sm flex items-center gap-3 border border-yellow-400/30 bg-yellow-900/20">
+          <span>Enable audio for voice replies</span>
+          <button
+            className="px-2 py-1 rounded border border-cyan-200/20 hover:bg-white/10"
+            onClick={async ()=>{ try { await primeAudio(); setAudioReady(isAudioReady()) } catch {} }}
+          >Enable</button>
+        </div>
+      )}
       <AnimatePresence initial={false}>
         {/* Chat shell */}
     {session.mode !== 'call' && (

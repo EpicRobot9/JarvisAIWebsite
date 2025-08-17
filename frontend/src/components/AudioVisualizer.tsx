@@ -8,7 +8,7 @@ export type VisualizerMode = 'idle' | 'listening' | 'speaking'
  * - Outer pulsing ring with glow
  * - Inner radial bars reacting to `level`
  */
-export default function AudioVisualizer({ level = 0, mode = 'idle', onPointerPTT }: { level?: number; mode?: VisualizerMode; onPointerPTT?: (down: boolean)=>void }) {
+export default function AudioVisualizer({ level = 0, mode = 'idle', onPointerPTT, hue = 195, altHue }: { level?: number; mode?: VisualizerMode; onPointerPTT?: (down: boolean)=>void; hue?: number; altHue?: number }) {
   const bars = new Array(36).fill(0)
   const controls = useAnimation()
   const glow = useMotionValue(0.4)
@@ -26,12 +26,12 @@ export default function AudioVisualizer({ level = 0, mode = 'idle', onPointerPTT
       <motion.div
         className="relative rounded-full"
         animate={controls}
-        style={{ boxShadow: `0 0 0 2px rgba(93,232,255,0.2), 0 0 80px rgba(93,232,255,${glow.get()})` }}
+    style={{ boxShadow: `0 0 0 2px hsla(${hue},100%,70%,0.2), 0 0 80px hsla(${hue},100%,60%,${glow.get()})` }}
         onPointerDown={()=>onPointerPTT?.(true)}
         onPointerUp={()=>onPointerPTT?.(false)}
         onPointerLeave={()=>onPointerPTT?.(false)}
       >
-        <div className="rounded-full" style={{ width: 260, height: 260, background: 'radial-gradient(circle at 50% 50%, rgba(93,232,255,0.2), rgba(9,18,38,0.5))', border: '1px solid rgba(93,232,255,0.25)'}}>
+    <div className="rounded-full" style={{ width: 260, height: 260, background: `radial-gradient(circle at 50% 50%, hsla(${hue},100%,70%,0.28), hsla(${altHue ?? hue},100%,55%,0.12) 40%, rgba(9,18,38,0.6))`, border: `1px solid hsla(${hue},100%,70%,0.25)`}}>
           <svg viewBox="0 0 100 100" width={260} height={260} className="block">
             {bars.map((_, i) => {
               const angle = (i / bars.length) * 2 * Math.PI
@@ -41,7 +41,7 @@ export default function AudioVisualizer({ level = 0, mode = 'idle', onPointerPTT
               const y = 50 + Math.sin(angle) * 28
               const x2 = 50 + Math.cos(angle) * (28 + amp/12)
               const y2 = 50 + Math.sin(angle) * (28 + amp/12)
-              return <line key={i} x1={x} y1={y} x2={x2} y2={y2} stroke="rgba(93,232,255,0.85)" strokeWidth={1.2} strokeLinecap="round" />
+      return <line key={i} x1={x} y1={y} x2={x2} y2={y2} stroke={`hsla(${hue},100%,70%,0.9)`} strokeWidth={1.2} strokeLinecap="round" />
             })}
           </svg>
         </div>

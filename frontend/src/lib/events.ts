@@ -52,7 +52,15 @@ export function useEventChannel(sessionId: string, userId: string | undefined, o
         const asPush = { type: 'push' as const, text: ev.text, role: 'assistant' as const, say: true }
         opts.onPush(asPush)
         if (opts.onSpeak) {
-          try { opts.setSpeaking(true); await opts.onSpeak(ev.text, { forceStream: true }) } finally { opts.setSpeaking(false) }
+          try {
+            opts.setSpeaking(true)
+            // Give AudioContext a chance to resume before attempting playback
+            try { await (await import('./audio')).primeAudio() } catch {}
+            await opts.onSpeak(ev.text, { forceStream: true })
+          } catch (e) {
+            // Fallback to Web Speech API if TTS playback failed
+            try { const a = await import('./audio'); await a.speakWithWebSpeech(ev.text) } catch {}
+          } finally { opts.setSpeaking(false) }
         }
       } else if (ev.type === 'call-end') {
         opts.onCallEnd(ev)

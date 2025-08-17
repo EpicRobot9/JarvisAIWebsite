@@ -1,6 +1,9 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import AudioVisualizer from './AudioVisualizer'
+import AnimatedBackground from './AnimatedBackground'
+import { EFFECTS } from './effects'
+import { storage } from '../lib/storage'
 import { setAudioLevelListener } from '../lib/audio'
 import { useCallSession } from '../hooks/useCallSession'
 
@@ -16,6 +19,19 @@ export default function CallMode({ userId, sessionId, useTestWebhook, onEnd, onT
   const [level, setLevel] = useState(0)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const rafRef = useRef<number | null>(null)
+  const uid = (userId || (typeof window !== 'undefined' && (window as any).__jarvis_user_id) || 'anon') as string
+  const [fx, setFx] = useState<keyof typeof EFFECTS>(() => {
+    const v = storage.get(`jarvis_fx_effect:${uid}`, 'Lotus Bloom')
+    return (Object.keys(EFFECTS) as Array<keyof typeof EFFECTS>).includes(v) ? (v as keyof typeof EFFECTS) : 'Lotus Bloom'
+  })
+  // Background mic reactivity disabled per request; rely on PTT only
+
+  useEffect(() => { storage.set(`jarvis_fx_effect:${uid}`, fx) }, [fx, uid])
+  // If user changes mid-session, reload their prefs
+  useEffect(() => {
+    const v = storage.get(`jarvis_fx_effect:${uid}`, fx)
+    if ((Object.keys(EFFECTS) as Array<keyof typeof EFFECTS>).includes(v)) setFx(v as keyof typeof EFFECTS)
+  }, [uid])
 
   // Fake/approximate animation input level (visual feedback) when we don't have analyser
   useEffect(()=>{
@@ -44,11 +60,51 @@ export default function CallMode({ userId, sessionId, useTestWebhook, onEnd, onT
     exit: { opacity: 0, scale: 0.95, filter: 'blur(8px)', transition: { duration: 0.25, ease: 'easeIn' } },
   }
 
+  // Map effect -> primary/secondary hues to match background palette
+  const effectHue: Record<keyof typeof EFFECTS, { hue: number; altHue?: number }> = {
+    'Lotus Bloom': { hue: 195 },
+    'Neon Tunnel': { hue: 200, altHue: 230 },
+    'Radial Spectrum (Mic)': { hue: 195, altHue: 220 },
+    'Dual Energy Ribbon': { hue: 200, altHue: 260 },
+    'Neon Pulses': { hue: 195, altHue: 220 },
+    'Particle Orbitals': { hue: 195, altHue: 210 },
+    'Hex Grid Glow': { hue: 200, altHue: 230 },
+    'Circuit Rain': { hue: 200, altHue: 210 },
+    'Aurora Waves': { hue: 210, altHue: 220 },
+    'Swirl Sprites': { hue: 210, altHue: 240 },
+    'Photon Streaks': { hue: 260, altHue: 220 },
+    'Halo Portal': { hue: 45, altHue: 55 },
+  } as const
+
   return (
     <AnimatePresence mode="wait">
       <motion.div key="call" variants={variants} initial="initial" animate="enter" exit="exit" className="fixed inset-0 z-40 grid place-items-center">
-        <div className="glass p-6 rounded-2xl w-full max-w-xl mx-auto grid place-items-center">
-          <AudioVisualizer level={level} mode={state === 'speaking' ? 'speaking' : (state === 'listening' ? 'listening' : 'idle')} onPointerPTT={(down)=> down ? startListening() : stopAndSend()} />
+        {/* Make the animated effects cover the entire background of the call overlay */}
+        <div className="absolute inset-0 z-0">
+          <AnimatedBackground effect={fx} micEnabled={state === 'listening' || state === 'speaking'} />
+        </div>
+        <div className="relative z-10 w-full max-w-2xl mx-auto overflow-hidden rounded-2xl ring-1 ring-white/10 bg-slate-950/70 backdrop-blur">
+          {/* Controls bar */}
+          <div className="absolute left-4 top-4 z-30 flex items-center gap-2 rounded-2xl bg-slate-900/70 p-2 ring-1 ring-white/10 backdrop-blur">
+            <label className="sr-only" htmlFor="fx-select">Effect</label>
+            <select
+              id="fx-select"
+              value={fx}
+              onChange={(e)=>setFx(e.target.value as keyof typeof EFFECTS)}
+              className="rounded-xl bg-slate-800/80 px-3 py-2 text-sm text-slate-100 outline-none ring-1 ring-white/10"
+            >
+              {Object.keys(EFFECTS).map(k => <option key={k}>{k}</option>)}
+            </select>
+          </div>
+
+          <div className="relative z-10 p-6 grid place-items-center">
+          <AudioVisualizer
+            level={level}
+            mode={state === 'speaking' ? 'speaking' : (state === 'listening' ? 'listening' : 'idle')}
+            onPointerPTT={(down)=> down ? startListening() : stopAndSend()}
+            hue={effectHue[fx]?.hue ?? 195}
+            altHue={effectHue[fx]?.altHue}
+          />
           <div className="mt-12 flex items-center gap-3">
             <button className="jarvis-btn" onClick={()=>startListening()} disabled={state==='listening'}>PTT</button>
             <button className="jarvis-btn jarvis-btn-primary" onClick={async()=>{ await stopAll(); onEnd() }}>End Call</button>
@@ -56,6 +112,7 @@ export default function CallMode({ userId, sessionId, useTestWebhook, onEnd, onT
           {error && (
             <div className="mt-3 text-sm text-red-300">{error.message} <button className="ml-2 underline" onClick={()=>resetError()}>Retry</button></div>
           )}
+          </div>
         </div>
       </motion.div>
     </AnimatePresence>

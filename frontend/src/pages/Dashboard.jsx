@@ -3,16 +3,60 @@ import { useNavigate } from 'react-router-dom'
 import { Mic, MessageSquare, Sparkles } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useRecorder } from '../hooks/useRecorder'
-import { WEBHOOK_URL, CALLBACK_URL, SOURCE_NAME } from '../lib/config'
+import { WEBHOOK_URL, CALLBACK_URL, SOURCE_NAME, CHAT_INACTIVITY_RESET_MS } from '../lib/config'
 import { storage } from '../lib/storage'
 
 function ChatSheet({ open, onClose, user, onDebug }) {
   const [input, setInput] = useState('')
-  const [messages, setMessages] = useState(() => storage.get('jarvis_chat_v1', []))
+  const [messages, setMessages] = useState(() => {
+    const saved = storage.get('jarvis_chat_v1', [])
+    const lastActive = Number(storage.get('jarvis_chat_lastActive_v1', 0) || 0)
+    const now = Date.now()
+    if (!Array.isArray(saved)) return []
+    if (!lastActive || now - lastActive > CHAT_INACTIVITY_RESET_MS) {
+      // Too much time since last activity; reset persisted chat
+      try {
+        storage.remove('jarvis_chat_v1')
+        storage.remove('jarvis_chat_lastActive_v1')
+      } catch {}
+      return []
+    }
+    return saved
+  })
   const [error, setError] = useState('')
-  useEffect(()=> storage.set('jarvis_chat_v1', messages), [messages])
+  useEffect(()=> { storage.set('jarvis_chat_v1', messages) }, [messages])
+
+  // Only mark last activity when the USER sends a message (not on focus/open/assistant reply)
+  const markUserSent = () => {
+    try { storage.set('jarvis_chat_lastActive_v1', Date.now()) } catch {}
+  }
+
+  // Check inactivity on open/focus and reset if needed
+  useEffect(()=> {
+    const checkAndMaybeReset = () => {
+      const lastActive = Number(storage.get('jarvis_chat_lastActive_v1', 0) || 0)
+      const now = Date.now()
+      if (!lastActive || now - lastActive > CHAT_INACTIVITY_RESET_MS) {
+        try {
+          storage.remove('jarvis_chat_v1')
+          storage.remove('jarvis_chat_lastActive_v1')
+        } catch {}
+        if (messages.length) setMessages([])
+      }
+    }
+    // run when sheet opens
+    if (open) checkAndMaybeReset()
+    const onVis = () => { if (!document.hidden) checkAndMaybeReset() }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onVis)
+    return ()=> {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('focus', onVis)
+    }
+  }, [open, messages.length])
 
   async function send(text) {
+    markUserSent()
     const correlationId = crypto.randomUUID()
     setMessages(m => [...m, { id: correlationId, role: 'user', content: text, at: Date.now() }])
     onDebug?.({ kind: 'request', at: Date.now(), correlationId, payload: { chatInput: text, userid: user?.id || 'anon' } })
@@ -31,7 +75,7 @@ function ChatSheet({ open, onClose, user, onDebug }) {
         messageType: 'TextMessage'
       })
     })
-    if (res.ok) {
+  if (res.ok) {
       setMessages(m => [...m, { id: correlationId, role: 'assistant', content: "On it! I’ll follow up as soon as I have results.", at: Date.now(), ack: true, startedAt: Date.now(), delay: 2000, lastPollAt: 0, attempts: 0, origText: text, origUserId: user?.id || 'anon' }])
       onDebug?.({ kind: 'ack', at: Date.now(), correlationId, status: res.status })
     } else {
@@ -90,6 +134,7 @@ function ChatSheet({ open, onClose, user, onDebug }) {
                   { id: crypto.randomUUID(), role: 'assistant', content: data.result, at: Date.now() },
                   ...(audioUrl ? [{ id: crypto.randomUUID(), role: 'system', audioUrl, at: Date.now() }] : [])
                 ]))
+              // Do not update inactivity timer on assistant reply; only on user sends
             }
           }
         } finally {
@@ -143,8 +188,8 @@ function ChatSheet({ open, onClose, user, onDebug }) {
             </div>
           ))}
         </div>
-        <form className="mt-2 flex gap-2" onSubmit={e=>{e.preventDefault(); if(input.trim()) { send(input.trim()); setInput('') }}}>
-          <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Type a message..." className="jarvis-input flex-1" />
+        <form className="mt-2 flex gap-2" onSubmit={e=>{e.preventDefault(); if(input.trim()) { send(input.trim()); setInput(''); }}}>
+          <input value={input} onChange={e=>{ setInput(e.target.value); markActive(); }} placeholder="Type a message..." className="jarvis-input flex-1" />
           <button className="jarvis-btn jarvis-btn-primary">Send</button>
         </form>
       </div>

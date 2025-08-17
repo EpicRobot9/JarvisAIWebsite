@@ -695,6 +695,8 @@ const PushIntegrationBody = z.object({
   userId: z.string().optional(),
   email: z.string().email().optional(),
   text: z.string().min(1),
+  // The following flags are accepted for backward compatibility,
+  // but this endpoint will force speaking behavior regardless.
   say: z.boolean().optional(),
   voice: z.boolean().optional(),
   role: z.enum(['assistant','system']).optional()
@@ -702,7 +704,7 @@ const PushIntegrationBody = z.object({
 app.post('/api/integration/push-to-user', integrationLimiter, requireIntegrationToken, async (req, res) => {
   const v = PushIntegrationBody.safeParse(req.body)
   if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
-  const { userId: uid, email, text, say, voice, role } = v.data
+  const { userId: uid, email, text } = v.data
   if (!uid && !email) return res.status(400).json({ error: 'missing_target' })
   let targetId = uid || null
   if (!targetId && email) {
@@ -710,9 +712,8 @@ app.post('/api/integration/push-to-user', integrationLimiter, requireIntegration
     targetId = u?.id || null
   }
   if (!targetId) return res.status(404).json({ error: 'user_not_found' })
-  const payload: EventPayload = voice
-    ? { type: 'push-voice', text }
-    : { type: 'push', text, role: role || 'assistant', say }
+  // Always trigger speaking for integration pushes for consistent behavior
+  const payload: EventPayload = { type: 'push-voice', text }
   publishToUser(targetId, payload)
   res.json({ ok: true })
 })

@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
 import { Mic, MessageSquare, LogOut, Sparkles, Palette } from 'lucide-react'
 import { useRecorder } from './hooks/useRecorder'
-import { WEBHOOK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, CALLBACK_URL, SOURCE_NAME } from './lib/config'
+import { WEBHOOK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, CALLBACK_URL, SOURCE_NAME, CHAT_INACTIVITY_RESET_MS } from './lib/config'
 import { storage } from './lib/storage'
 import { Link, useNavigate } from 'react-router-dom'
 
@@ -54,8 +54,49 @@ function BubblesBg() {
 function ChatSheet({ open, onClose, webhookUrl }) {
   const { user } = useUser()
   const [input, setInput] = useState('')
-  const [messages, setMessages] = useState(() => storage.get('jarvis_chat_v1', []))
+  const [messages, setMessages] = useState(() => {
+    const saved = storage.get('jarvis_chat_v1', [])
+    const lastActive = Number(storage.get('jarvis_chat_lastActive_v1', 0) || 0)
+    const now = Date.now()
+    if (!Array.isArray(saved)) return []
+    if (!lastActive || now - lastActive > CHAT_INACTIVITY_RESET_MS) {
+      try {
+        storage.remove('jarvis_chat_v1')
+        storage.remove('jarvis_chat_lastActive_v1')
+      } catch {}
+      return []
+    }
+    return saved
+  })
   useEffect(()=> storage.set('jarvis_chat_v1', messages), [messages])
+
+  // Only update inactivity timer when USER sends a message
+  const markUserSent = () => {
+    try { storage.set('jarvis_chat_lastActive_v1', Date.now()) } catch {}
+  }
+
+  // On open/focus, check inactivity and reset if needed
+  useEffect(()=> {
+    const checkAndMaybeReset = () => {
+      const lastActive = Number(storage.get('jarvis_chat_lastActive_v1', 0) || 0)
+      const now = Date.now()
+      if (!lastActive || now - lastActive > CHAT_INACTIVITY_RESET_MS) {
+        try {
+          storage.remove('jarvis_chat_v1')
+          storage.remove('jarvis_chat_lastActive_v1')
+        } catch {}
+        if (messages.length) setMessages([])
+      }
+    }
+    if (open) checkAndMaybeReset()
+    const onVis = () => { if (!document.hidden) checkAndMaybeReset() }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onVis)
+    return ()=> {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('focus', onVis)
+    }
+  }, [open, messages.length])
 
   function retryFrom(msg) {
     const text = msg?.origText || messages.find(m => m.role==='user' && m.correlationId===msg?.correlationId)?.content || ''
@@ -64,6 +105,7 @@ function ChatSheet({ open, onClose, webhookUrl }) {
 
   async function send(text) {
     const correlationId = crypto.randomUUID()
+  markUserSent()
     // Add the user message with its own unique id
     setMessages(m => [
       ...m,

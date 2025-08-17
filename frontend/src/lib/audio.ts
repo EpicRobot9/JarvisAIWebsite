@@ -71,6 +71,39 @@ function getCtx() {
   return audioCtx
 }
 
+// --- Autoplay unlock helpers ---
+let unlocked = false
+export async function primeAudio(): Promise<void> {
+  try {
+    const ctx = getCtx()
+    if (ctx.state === 'suspended') {
+      await ctx.resume()
+    }
+    unlocked = ctx.state === 'running'
+  } catch { /* ignore */ }
+}
+export function installAutoplayUnlocker() {
+  if (unlocked) return
+  const handler = async () => {
+    try { await primeAudio() } catch {}
+    if (unlocked) {
+      document.removeEventListener('click', handler)
+      document.removeEventListener('keydown', handler)
+      document.removeEventListener('touchstart', handler)
+    }
+  }
+  document.addEventListener('click', handler, { once: false })
+  document.addEventListener('keydown', handler, { once: false })
+  document.addEventListener('touchstart', handler, { once: false })
+}
+
+export function isAudioReady(): boolean {
+  try {
+    const ctx = getCtx()
+    return ctx.state === 'running'
+  } catch { return false }
+}
+
 /**
  * Convert an audio Blob (webm/opus) to a 16-bit PCM WAV ArrayBuffer.
  * Uses WebAudio to decode and re-encode.
@@ -256,6 +289,22 @@ export async function playStreamUrl(url: string): Promise<void> {
         rafId = requestAnimationFrame(tick)
       }
       tick()
+    }
+  })
+}
+
+/** Fallback: speak via Web Speech API (if available). */
+export function speakWithWebSpeech(text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      const synth: SpeechSynthesis | undefined = (window as any).speechSynthesis
+      if (!synth) return reject(new Error('Web Speech not available'))
+      const utt = new SpeechSynthesisUtterance(text)
+      utt.onend = () => resolve()
+      utt.onerror = (e) => reject(e.error || new Error('Speech synthesis failed'))
+      try { synth.speak(utt) } catch (e) { reject(e as any) }
+    } catch (e) {
+      reject(e as any)
     }
   })
 }
