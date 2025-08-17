@@ -121,6 +121,14 @@ docker compose -p techexplore \
 What this does
 - `cloudflared` makes an outbound connection to Cloudflare.
 - Cloudflare serves HTTPS for `techexplore.us` and forwards traffic to `http://frontend:80` over the tunnel.
+
+Note on cloudflared image tag:
+- The compose file defaults to `cloudflare/cloudflared:latest` via the `CLOUDFLARED_IMAGE` env var.
+- If you see “manifest for cloudflare/cloudflared:<tag> not found”, set a known-good tag explicitly, e.g.:
+
+  CLOUDFLARED_IMAGE=cloudflare/cloudflared:2024.11.0
+
+  Put this in `.env` on the server before running the deploy/update script, or export it in your shell.
 - No host-level port 80/443 usage, so no conflicts with other apps.
 
 ## 3B) Publish behind an existing reverse proxy
