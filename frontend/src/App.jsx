@@ -395,7 +395,7 @@ export default function App() {
           <h3 className="text-lg font-semibold mb-2 text-cyan-300">Live Status</h3>
           <ul className="text-sm jarvis-subtle list-disc ml-5 space-y-1">
             <li>Signed in: {user? 'yes' : 'no'}</li>
-            <li>User: {user? `${user.email} (${user.role})` : '-'}</li>
+            <li>User: {user? `${user.username} (${user.role})` : '-'}</li>
             <li>Mic level: {rec.level}%</li>
           </ul>
         </div>

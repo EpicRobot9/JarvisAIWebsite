@@ -12,6 +12,7 @@ Root `.env` variables (used by docker-compose):
 - REQUIRE_ADMIN_APPROVAL=false
 - LOCK_NEW_ACCOUNTS=false
 - ADMIN_EMAILS=
+- ADMIN_USERNAMES=admin  # preferred for seeding admin(s); defaults to 'admin' in docker-compose
 - SEED_DB=true
 - VITE_WEBHOOK_URL=... (frontend prod webhook)
 - VITE_WEBHOOK_TEST_URL=... (frontend test webhook)
@@ -22,6 +23,7 @@ Root `.env` variables (used by docker-compose):
 
 Backend-only:
 - TRANSCRIBE_MODEL=whisper-1 (or gpt-4o-mini-transcribe)
+- COOKIE_SECURE=false  # set true to force Secure cookies; otherwise auto-true in production when FRONTEND_ORIGIN is https
 
 Notes:
 - For production, set strong SESSION_SECRET and use HTTPS terminated at a proxy.

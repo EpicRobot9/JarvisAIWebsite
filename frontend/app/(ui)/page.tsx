@@ -14,7 +14,7 @@ import CallMode from '../../src/components/CallMode'
 import Markdown from '../../src/components/ui/Markdown'
 import { Play as PlayIcon, Square as StopIcon, Mic as MicIcon, MicOff as MicOffIcon } from 'lucide-react'
 
-type Me = { id: string; email: string; role: string; status: string } | null
+type Me = { id: string; username: string; role: string; status: string } | null
 
 export default function Page() {
   const nav = useNavigate()
@@ -443,7 +443,7 @@ export default function Page() {
       {/* Right panel */}
   <aside className="glass rounded-2xl p-4 h-full space-y-3 overflow-y-auto">
         <h3 className="text-cyan-300 font-semibold">Status</h3>
-        <div className="text-sm">User: {loadingMe ? 'loading…' : (me ? `${me.email} (${me.status})` : 'guest')}</div>
+  <div className="text-sm">User: {loadingMe ? 'loading…' : (me ? `${me.username} (${me.status})` : 'guest')}</div>
         {!loadingMe && !me && (
           <div className="flex gap-2">
             <Link to="/signin" className="px-3 py-2 rounded-xl border border-cyan-200/20">Sign in</Link>

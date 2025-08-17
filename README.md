@@ -69,14 +69,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/EpicRobot9/JarvisAIWebsite/m
 
 ## Accounts
 
-- Sign up at `/signup`. If `REQUIRE_ADMIN_APPROVAL=true`, new users start as pending; an admin must approve (admin tools live in the API; the standalone Dashboard has been removed in favor of the main Portal).
+- Sign up at `/signup`. If `REQUIRE_ADMIN_APPROVAL=true`, new users start as pending; an admin must approve (admin tools are in the Admin page of the app).
 - Default admin (development):
-	- Email: admin@example.com
-	- Password: changeme (or override with `ADMIN_DEFAULT_PASSWORD`)
-	- This user is created automatically when `SEED_DB=true` (enabled in docker-compose) and `ADMIN_EMAILS=admin@example.com`.
+	- Username: `admin`
+	- Password: `changeme` (override with `ADMIN_DEFAULT_PASSWORD`)
+	- This user is created automatically when `SEED_DB=true` (enabled in docker-compose) and `ADMIN_USERNAMES` includes `admin` (the compose file sets a default).
 	- If the user already exists, the seeder will set the role to admin, mark status active, and reset the password to the default.
 	- Change the password immediately in production.
-- To make additional admins, set `ADMIN_EMAILS="admin@example.com,another@site.com"` before first run (or run the seed again with `SEED_DB=true`).
+- Backward compatibility: you can still specify `ADMIN_EMAILS` to bootstrap admins from email addresses; the seeder will treat them as usernames if `ADMIN_USERNAMES` isn’t set.
 - Sign in at `/signin`.
 
 ## Environment variables

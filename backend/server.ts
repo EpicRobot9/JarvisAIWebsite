@@ -22,6 +22,13 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
 const SESSION_COOKIE = 'jarvis_sid'
+// Use Secure cookies only if:
+// - COOKIE_SECURE=true explicitly, or
+// - running in production AND the frontend origin is HTTPS
+const COOKIE_SECURE = (
+  String(process.env.COOKIE_SECURE || '').toLowerCase() === 'true' ||
+  (process.env.NODE_ENV === 'production' && FRONTEND_ORIGIN.startsWith('https://'))
+)
 
 app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }))
 app.use(express.json())
@@ -300,22 +307,28 @@ const authLimiter = rateLimit({ windowMs: 60_000, max: 30 })
 // Rate limit token-based integration pushes per-IP
 const integrationLimiter = rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false })
 
-// Auth routes
+// Auth routes (username-based)
 app.post('/api/auth/signup', authLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body || {}
-    if (!email || !password) return res.status(400).json({ error: 'missing_fields' })
+    const { username, password } = req.body || {}
+    if (!username || !password) return res.status(400).json({ error: 'missing_fields' })
     if ((await getFlag('LOCK_NEW_ACCOUNTS')) === 'true') return res.status(403).json({ error: 'locked' })
-    const existing = await prisma.user.findUnique({ where: { email } })
+  const existing = await (prisma as any).user.findUnique({ where: { username } })
     if (existing) return res.status(409).json({ error: 'exists' })
     const passwordHash = await bcrypt.hash(password, 10)
 
   let status: 'active' | 'pending' | 'denied' = 'active'
   if ((await getFlag('REQUIRE_ADMIN_APPROVAL')) === 'true') status = 'pending'
 
-  const role: 'admin' | 'user' = (process.env.ADMIN_EMAILS || '').split(',').map(s => s.trim()).includes(email) ? 'admin' : 'user'
+  // Prefer ADMIN_USERNAMES; fall back to ADMIN_EMAILS for backward compatibility
+  const adminList = (process.env.ADMIN_USERNAMES || process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map(s => s.trim())
+  const role: 'admin' | 'user' = adminList.includes(username) ? 'admin' : 'user'
 
-    const user = await prisma.user.create({ data: { email, passwordHash, role, status } })
+  // Temporary: set a fallback email for compatibility while migrating
+  const fallbackEmail = `${String(username).toLowerCase()}@local.local`
+  const user = await (prisma as any).user.create({ data: { username, email: fallbackEmail, passwordHash, role, status } })
     if (status === 'pending') {
       await prisma.approval.create({ data: { userId: user.id } })
     }
@@ -326,9 +339,22 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
 })
 
 app.post('/api/auth/signin', authLimiter, async (req, res) => {
-  const { email, password } = req.body || {}
-  if (!email || !password) return res.status(400).json({ error: 'missing_fields' })
-  const user = await prisma.user.findUnique({ where: { email } })
+  // Temporary dual-lookup: allow login via username OR email
+  const { username, email, password } = req.body || {}
+  const identifier = (username || email || '').trim()
+  if (!identifier || !password) return res.status(400).json({ error: 'missing_fields' })
+
+  let user = null as any
+  try {
+    // If identifier looks like an email, prefer email lookup first
+    if (identifier.includes('@')) {
+      user = await (prisma as any).user.findUnique({ where: { email: identifier } })
+    }
+    if (!user) {
+      // Temporary: cast to any until Prisma schema/types are fully migrated
+      user = await (prisma as any).user.findUnique({ where: { username: identifier } })
+    }
+  } catch {}
   if (!user) return res.status(401).json({ error: 'invalid' })
   const ok = await bcrypt.compare(password, user.passwordHash)
   if (!ok) return res.status(401).json({ error: 'invalid' })
@@ -341,12 +367,12 @@ app.post('/api/auth/signin', authLimiter, async (req, res) => {
   res.cookie(SESSION_COOKIE, sid, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+  secure: COOKIE_SECURE,
     signed: true,
     expires: expiresAt,
     path: '/',
   })
-  return res.json({ id: user.id, email: user.email, role: user.role, status: user.status })
+  return res.json({ id: user.id, username: user.username, role: user.role, status: user.status })
 })
 
 app.post('/api/auth/signout', requireAuth, async (req: any, res) => {
@@ -357,13 +383,14 @@ app.post('/api/auth/signout', requireAuth, async (req: any, res) => {
 
 app.get('/api/auth/me', async (req: any, res) => {
   if (!req.user) return res.json(null)
-  const { id, email, role, status } = req.user
-  res.json({ id, email, role, status })
+  const { id, username, role, status } = req.user
+  res.json({ id, username, role, status })
 })
 
 // Admin routes
 app.get('/api/admin/pending', requireAuth, requireAdmin, async (req, res) => {
-  const users = await prisma.user.findMany({ where: { status: 'pending' }, select: { id: true, email: true } })
+  // Temporary: cast to any for username select until Prisma types include username
+  const users = await (prisma as any).user.findMany({ where: { status: 'pending' }, select: { id: true, username: true } })
   res.json(users)
 })
 app.post('/api/admin/approve', requireAuth, requireAdmin, async (req: any, res) => {
@@ -436,8 +463,9 @@ app.post('/api/admin/keys', requireAuth, requireAdmin, async (req, res) => {
 
 // Admin: users listing
 app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
-  const users = await prisma.user.findMany({
-    select: { id: true, email: true, role: true, status: true, createdAt: true }
+  // Temporary: cast to any for username select until Prisma types include username
+  const users = await (prisma as any).user.findMany({
+    select: { id: true, username: true, role: true, status: true, createdAt: true }
   })
   res.json(users)
 })
@@ -754,13 +782,24 @@ app.post('/api/push-voice', async (req, res) => {
   res.json({ ok: true })
 })
 
-// Admin: push by user targeting (userId or email) for n8n integrations
-const PushUserBody = z.object({ userId: z.string().optional(), email: z.string().email().optional(), text: z.string().min(1), say: z.boolean().optional(), voice: z.boolean().optional() })
+// Admin: push by user targeting (userId or username/email) for n8n integrations
+const PushUserBody = z.object({
+  userId: z.string().optional(),
+  username: z.string().optional(),
+  email: z.string().optional(), // temporary dual-lookup support
+  text: z.string().min(1),
+  say: z.boolean().optional(),
+  voice: z.boolean().optional()
+})
 app.post('/api/admin/push-to-user', requireAuth, requireAdmin, async (req, res) => {
   const v = PushUserBody.safeParse(req.body)
   if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
-  const { userId: uid, email, text, say, voice } = v.data
+  const { userId: uid, username, email, text, say, voice } = v.data
   let targetId = uid || null
+  if (!targetId && username) {
+    const u = await (prisma as any).user.findUnique({ where: { username } }).catch(()=>null)
+    targetId = u?.id || null
+  }
   if (!targetId && email) {
     const u = await prisma.user.findUnique({ where: { email } }).catch(()=>null)
     targetId = u?.id || null
@@ -771,12 +810,13 @@ app.post('/api/admin/push-to-user', requireAuth, requireAdmin, async (req, res) 
   res.json({ ok: true })
 })
 
-// Public, token-secured: push to user by userId or email (no admin cookie)
+// Public, token-secured: push to user by userId or username/email (no admin cookie)
 // Auth: Authorization: Bearer <INTEGRATION_PUSH_TOKEN>
-// Body: { userId?: string, email?: string, text: string, say?: boolean, voice?: boolean, role?: 'assistant'|'system' }
+// Body: { userId?: string, username?: string, text: string, say?: boolean, voice?: boolean, role?: 'assistant'|'system' }
 const PushIntegrationBody = z.object({
   userId: z.string().optional(),
-  email: z.string().email().optional(),
+  username: z.string().optional(),
+  email: z.string().optional(), // temporary dual-lookup support
   text: z.string().min(1),
   // The following flags are accepted for backward compatibility,
   // but this endpoint will force speaking behavior regardless.
@@ -787,9 +827,13 @@ const PushIntegrationBody = z.object({
 app.post('/api/integration/push-to-user', integrationLimiter, requireIntegrationToken, async (req, res) => {
   const v = PushIntegrationBody.safeParse(req.body)
   if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
-  const { userId: uid, email, text } = v.data
-  if (!uid && !email) return res.status(400).json({ error: 'missing_target' })
+  const { userId: uid, username, email, text } = v.data
+  if (!uid && !username && !email) return res.status(400).json({ error: 'missing_target' })
   let targetId = uid || null
+  if (!targetId && username) {
+    const u = await (prisma as any).user.findUnique({ where: { username } }).catch(()=>null)
+    targetId = u?.id || null
+  }
   if (!targetId && email) {
     const u = await prisma.user.findUnique({ where: { email } }).catch(()=>null)
     targetId = u?.id || null

@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 
 export default function SignIn() {
   const nav = useNavigate()
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
 
@@ -14,7 +14,7 @@ export default function SignIn() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ username, password })
     })
     if (r.ok) {
       nav('/')
@@ -22,7 +22,7 @@ export default function SignIn() {
       let err = ''
       try { const t = await r.text(); err = t ? (JSON.parse(t).error || '') : '' } catch {}
       if (err === 'pending') {
-        try { sessionStorage.setItem('jarvis_pending_email', email); sessionStorage.setItem('jarvis_pending_pw', password) } catch {}
+        try { sessionStorage.setItem('jarvis_pending_user', username); sessionStorage.setItem('jarvis_pending_pw', password) } catch {}
         nav('/awaiting')
       } else if (err === 'denied') {
         setError('Your request was denied. Contact an administrator.')
@@ -38,7 +38,7 @@ export default function SignIn() {
     <div className="min-h-screen grid place-items-center p-4">
       <form onSubmit={submit} className="w-full max-w-sm rounded-2xl glass p-6 space-y-3">
         <h1 className="jarvis-title">Sign in</h1>
-        <input className="jarvis-input" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
+  <input className="jarvis-input" placeholder="Username" value={username} onChange={e=>setUsername(e.target.value)} />
         <input className="jarvis-input" placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
         {error && <div className="text-red-600 text-sm">{error}</div>}
         <button className="w-full jarvis-btn jarvis-btn-primary justify-center">Sign in</button>

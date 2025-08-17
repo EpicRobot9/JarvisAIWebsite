@@ -7,9 +7,9 @@ export default function AwaitingApproval() {
   const [msg, setMsg] = useState('Account created. Awaiting approval from an admin…')
 
   async function tryAutoSignIn() {
-    const email = sessionStorage.getItem('jarvis_pending_email') || ''
+  const username = sessionStorage.getItem('jarvis_pending_user') || ''
     const password = sessionStorage.getItem('jarvis_pending_pw') || ''
-    if (!email || !password) {
+  if (!username || !password) {
       setStatus('error')
       setMsg('Missing credentials. Please sign in when your account is approved.')
       return
@@ -19,11 +19,11 @@ export default function AwaitingApproval() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ email, password })
+    body: JSON.stringify({ username, password })
       })
       if (r.ok) {
         // Clear temp creds and go home
-        sessionStorage.removeItem('jarvis_pending_email')
+    sessionStorage.removeItem('jarvis_pending_user')
         sessionStorage.removeItem('jarvis_pending_pw')
         nav('/')
         return
@@ -77,7 +77,7 @@ export default function AwaitingApproval() {
         <div className="pt-2 flex items-center justify-center gap-3">
           <button
             className="jarvis-btn"
-            onClick={() => { sessionStorage.removeItem('jarvis_pending_email'); sessionStorage.removeItem('jarvis_pending_pw'); nav('/signin') }}
+            onClick={() => { sessionStorage.removeItem('jarvis_pending_user'); sessionStorage.removeItem('jarvis_pending_pw'); nav('/signin') }}
           >Use different account</button>
           <Link to="/" className="px-3 py-2 rounded-xl border border-cyan-200/20">Home</Link>
         </div>

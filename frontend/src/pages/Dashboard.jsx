@@ -345,7 +345,7 @@ export default function Dashboard() {
             <h3 className="text-lg font-semibold mb-2 text-cyan-300">Live Status</h3>
             <ul className="text-sm jarvis-subtle list-disc ml-5 space-y-1">
               <li>Signed in: {me? 'yes' : (loading ? 'checking…' : 'no')}</li>
-              <li>User: {me? `${me.email} (${me.role})` : '-'}</li>
+              <li>User: {me? `${me.username} (${me.role})` : '-'}</li>
               <li>Mic level: {rec.level}%</li>
             </ul>
           </div>
@@ -357,7 +357,7 @@ export default function Dashboard() {
                 <ul className="space-y-2">
                   {pending.map(u => (
                     <li key={u.id} className="flex items-center justify-between">
-                      <span>{u.email}</span>
+                      <span>{u.username}</span>
                       <div className="space-x-2">
                         <button className="px-3 py-1 rounded bg-green-600 text-white" onClick={()=>approve(u.id)}>Approve</button>
                         <button className="px-3 py-1 rounded bg-red-600 text-white" onClick={()=>deny(u.id)}>Deny</button>

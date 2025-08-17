@@ -339,7 +339,7 @@ export default function Admin() {
                   <ul className="space-y-2">
                     {pending.map(u => (
                       <li key={u.id} className="flex items-center justify-between">
-                        <span>{u.email}</span>
+                        <span>{u.username}</span>
                         <div className="space-x-2">
                           <button className="px-3 py-1 rounded bg-green-600 text-white" onClick={()=>approve(u.id)}>Approve</button>
                           <button className="px-3 py-1 rounded bg-red-600 text-white" onClick={()=>deny(u.id)}>Deny</button>
@@ -354,7 +354,7 @@ export default function Admin() {
           <table className="w-full text-sm">
             <thead className="text-left text-slate-400">
               <tr>
-                <th className="py-2">Email</th>
+                <th className="py-2">Username</th>
                 <th>Role</th>
                 <th>Status</th>
                 <th>Joined</th>
@@ -364,7 +364,7 @@ export default function Admin() {
             <tbody>
               {users.map(u => (
                 <tr key={u.id} className="border-t border-cyan-200/10">
-                  <td className="py-2">{u.email}</td>
+                  <td className="py-2">{u.username}</td>
                   <td>{u.role}</td>
                   <td>{u.status}</td>
                   <td>{new Date(u.createdAt).toLocaleString()}</td>
