@@ -413,11 +413,16 @@ app.get('/api/admin/keys', requireAuth, requireAdmin, async (req, res) => {
 app.post('/api/admin/keys', requireAuth, requireAdmin, async (req, res) => {
   const body = req.body || {}
   // Note: request/response bodies are masked by REDACT_KEYS to avoid logging secrets
-  const upd: Record<string, string | null | undefined> = {}
-  if ('OPENAI_API_KEY' in body) upd.OPENAI_API_KEY = typeof body.OPENAI_API_KEY === 'string' ? body.OPENAI_API_KEY.trim() : null
-  if ('ELEVENLABS_API_KEY' in body) upd.ELEVENLABS_API_KEY = typeof body.ELEVENLABS_API_KEY === 'string' ? body.ELEVENLABS_API_KEY.trim() : null
-  await setSettingValue('OPENAI_API_KEY', upd.OPENAI_API_KEY ?? undefined)
-  await setSettingValue('ELEVENLABS_API_KEY', upd.ELEVENLABS_API_KEY ?? undefined)
+  const providedOpenAI = Object.prototype.hasOwnProperty.call(body, 'OPENAI_API_KEY')
+  const providedEleven = Object.prototype.hasOwnProperty.call(body, 'ELEVENLABS_API_KEY')
+  if (providedOpenAI) {
+    const v = typeof body.OPENAI_API_KEY === 'string' ? body.OPENAI_API_KEY.trim() : ''
+    await setSettingValue('OPENAI_API_KEY', v)
+  }
+  if (providedEleven) {
+    const v = typeof body.ELEVENLABS_API_KEY === 'string' ? body.ELEVENLABS_API_KEY.trim() : ''
+    await setSettingValue('ELEVENLABS_API_KEY', v)
+  }
   const openaiDb = await getSettingValue('OPENAI_API_KEY')
   const elevenDb = await getSettingValue('ELEVENLABS_API_KEY')
   res.json({
