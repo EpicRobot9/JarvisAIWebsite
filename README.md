@@ -67,6 +67,19 @@ One‑liner installer (keeps your .env as‑is except `FRONTEND_ORIGIN` when dom
 bash <(curl -fsSL https://raw.githubusercontent.com/EpicRobot9/JarvisAIWebsite/main/scripts/install.sh) --domain techexplore.us --token <CLOUDFLARE_TUNNEL_TOKEN>
 ```
 
+Clean rebuild tip
+
+If things look cached or the admin password didn’t reset as expected, do a from‑scratch rebuild:
+
+```
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml down --volumes --rmi all --remove-orphans
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml build --no-cache --pull
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml up -d
+# optional one-time reset and summary
+./scripts/update.sh --admin-user admin --admin-password 'Admin123!' --admin-reset once
+```
+See more in `docs/DEPLOYMENT.md`.
+
 ## Accounts
 
 - Sign up at `/signup`. If `REQUIRE_ADMIN_APPROVAL=true`, new users start as pending; an admin must approve (admin tools are in the Admin page of the app).

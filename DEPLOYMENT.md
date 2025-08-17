@@ -212,6 +212,30 @@ docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml u
 # add -f docker-compose.tunnel.yml if you use the tunnel
 ```
 
+From-scratch rebuild (no cache; optionally wipe DB)
+
+If you need a truly clean rebuild (helpful when credentials or seed state is confusing):
+
+```
+# Stop and remove containers; also remove volumes (ERASES DB) and images for this stack
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml down --volumes --rmi all --remove-orphans
+# If using the tunnel, include its compose file in the same down command (optional)
+
+# Prune build cache globally (optional but thorough)
+docker builder prune -a -f
+
+# Rebuild all images without cache and pull fresh bases
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml build --no-cache --pull
+
+# Start the stack
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# One-time: set a known admin password and print summary
+./scripts/update.sh --admin-user admin --admin-password 'Admin123!' --admin-reset once
+```
+
+The update script prints the admin username(s) and, when in reset mode, the exact password you can use to sign in.
+
 Logs:
 ```
 docker compose -p techexplore logs -f backend
