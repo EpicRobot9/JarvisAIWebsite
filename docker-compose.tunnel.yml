@@ -1,6 +1,6 @@
 services:
   cloudflared:
-  image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+  image: "${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}"
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
