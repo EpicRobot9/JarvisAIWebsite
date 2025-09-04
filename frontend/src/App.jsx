@@ -378,6 +378,11 @@ export default function App() {
           <Sparkles className="text-cyan-300" size={20}/> Jarvis Portal
         </div>
         <div className="flex items-center gap-2">
+          {user && (
+            <Link to="/interstellar" className="jarvis-btn jarvis-btn-primary flex items-center gap-2">
+              <Sparkles size={18}/> Interstellar Manager
+            </Link>
+          )}
           <div className="flex items-center gap-1 rounded-xl border px-2 py-2 bg-white/5 backdrop-blur-md border-cyan-200/20">
             <label className="text-xs mr-1 jarvis-subtle">Webhook:</label>
             <button type="button" onClick={()=>setUseTest(false)} className={`px-2 py-1 rounded text-xs border ${!useTest?'bg-blue-600 text-white':'border-cyan-200/20 hover:bg-white/10'}`}>Prod</button>
@@ -420,7 +425,14 @@ export default function App() {
       <main className="max-w-5xl mx-auto p-4 grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl glass p-6">
           <h3 className="text-lg font-semibold mb-2 text-cyan-300">Welcome</h3>
-          <p className="jarvis-subtle">Use the header to open UI Chat or start a Voice recording. Messages go to your n8n webhook with the exact payload fields required.</p>
+          <p className="jarvis-subtle mb-4">Use the header to open UI Chat or start a Voice recording. Messages go to your n8n webhook with the exact payload fields required.</p>
+          {user && (
+            <div className="flex gap-2">
+              <Link to="/interstellar" className="jarvis-btn jarvis-btn-primary flex items-center gap-2">
+                <Sparkles size={18}/> Interstellar Manager
+              </Link>
+            </div>
+          )}
         </div>
         <div className="rounded-2xl glass p-6">
           <h3 className="text-lg font-semibold mb-2 text-cyan-300">Live Status</h3>

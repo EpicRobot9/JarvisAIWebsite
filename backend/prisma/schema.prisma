@@ -18,6 +18,8 @@ model User {
   sessions     Session[]
   approvals    Approval[] @relation("UserApprovals")
   decided      Approval[] @relation("DecidedBy")
+  interstellarRequests InterstellarRequest[] @relation("InterstellarRequestUser")
+  interstellarDecisions InterstellarRequest[] @relation("InterstellarRequestDecidedBy")
   logs         ApiLog[]
 }
 
@@ -78,4 +80,19 @@ model ApiLog {
   @@index([ts])
   @@index([path])
   @@index([status])
+}
+
+model InterstellarRequest {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation("InterstellarRequestUser", fields: [userId], references: [id])
+  fullName    String
+  status      String   @default("pending") // 'pending' | 'approved' | 'denied'
+  decidedById String?
+  decidedBy   User?    @relation("InterstellarRequestDecidedBy", fields: [decidedById], references: [id])
+  decidedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([status])
+  @@index([userId])
 }

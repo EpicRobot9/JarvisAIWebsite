@@ -13,6 +13,8 @@ import fetch from 'node-fetch'
 import { z } from 'zod'
 import { WebSocketServer } from 'ws'
 import type { WebSocket } from 'ws'
+import { exec } from 'child_process'
+import interstellarRouter from './interstellar.js'
 
 dotenv.config()
 
@@ -30,10 +32,14 @@ const COOKIE_SECURE = (
   (process.env.NODE_ENV === 'production' && FRONTEND_ORIGIN.startsWith('https://'))
 )
 
+// Ensure we have a cookie signing secret in dev so signed cookies work locally.
+// In production we require SESSION_SECRET via env (validated below).
+const COOKIE_SECRET = process.env.SESSION_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'dev-local-session-secret')
+
 app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
-app.use(cookieParser(process.env.SESSION_SECRET || ''))
+app.use(cookieParser(COOKIE_SECRET))
 // Trust reverse proxy (nginx) so rate-limit sees the correct client IP
 app.set('trust proxy', 1)
 
@@ -51,6 +57,9 @@ async function sessionMiddleware(req: any, res: any, next: any) {
   next()
 }
 app.use(sessionMiddleware)
+
+// Interstellar router
+app.use(interstellarRouter)
 
 // Observability: safe serialization and sanitizer
 const REDACT_KEYS = new Set([
@@ -367,7 +376,7 @@ app.post('/api/auth/signin', authLimiter, async (req, res) => {
   res.cookie(SESSION_COOKIE, sid, {
     httpOnly: true,
     sameSite: 'lax',
-  secure: COOKIE_SECURE,
+    secure: COOKIE_SECURE,
     signed: true,
     expires: expiresAt,
     path: '/',
@@ -682,6 +691,77 @@ app.post('/api/router', requireAuth, async (req: any, res) => {
     res.json({ reply })
   } catch (e) {
     res.status(502).json({ error: 'router_failed', detail: (e as Error).message })
+  }
+})
+
+// Admin: Create new backup via N8N webhook and refresh codespace
+app.post('/api/admin/create-backup', requireAuth, requireAdmin, async (req: any, res) => {
+  try {
+    // Get webhook URLs from database (use correct key names)
+    const prodPostUrl = await getSettingValue('INTERSTELLAR_POST_URL_PROD')
+    const webhookUrl = prodPostUrl || process.env.VITE_WEBHOOK_URL || process.env.N8N_WEBHOOK_URL
+    
+    if (!webhookUrl) {
+      return res.status(400).json({ error: 'webhook_not_configured' })
+    }
+
+    const correlationId = randomUUID()
+    
+    // Send NewBackUp action to N8N
+    const r = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'NewBackUp',
+        chatInput: 'NewBackUp',
+        userid: req.user.id,
+        username: req.user.username,
+        correlationId,
+        callbackUrl: '/api/jarvis/callback',
+        source: 'jarvis-portal-admin',
+        messageType: 'AdminAction',
+        adminAction: 'NewBackUp'
+      }),
+    })
+
+    const text = await r.text().catch(() => '')
+    if (!r.ok) {
+      return res.status(r.status).json({ error: 'backup_webhook_failed', body: text })
+    }
+
+    let reply = ''
+    try {
+      const data = text ? JSON.parse(text) : null
+      if (data && typeof data === 'object') reply = data.reply || data.result || data.output || data.text || ''
+      else if (typeof data === 'string') reply = data
+    } catch {
+      reply = text
+    }
+
+    // Check if we're in a codespace and attempt to refresh
+    let codespaceRefreshed = false
+    if (process.env.CODESPACES === 'true') {
+      try {
+        // Execute codespace refresh command
+        exec('sudo systemctl restart docker', (error: any) => {
+          if (!error) {
+            codespaceRefreshed = true
+          }
+        })
+      } catch (e) {
+        // Codespace refresh failed, but backup might still have succeeded
+      }
+    }
+
+    res.json({ 
+      ok: true, 
+      correlationId,
+      backupResponse: reply,
+      codespaceRefreshed,
+      message: 'Backup request sent to N8N'
+    })
+  } catch (e) {
+    res.status(502).json({ error: 'backup_failed', detail: (e as Error).message })
   }
 })
 

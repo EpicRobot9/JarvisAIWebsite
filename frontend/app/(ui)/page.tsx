@@ -483,14 +483,15 @@ export default function Page() {
             <Link to="/signup" className="px-3 py-2 rounded-xl bg-blue-600 text-white">Sign up</Link>
           </div>
         )}
-        {!loadingMe && me && (
+            {!loadingMe && me && (
           <div>
             <button className="px-3 py-2 rounded-xl border border-cyan-200/20" onClick={signOut}>Sign out</button>
-            {me.role === 'admin' && (
-              <div className="mt-2">
-                <Link to="/admin" className="px-3 py-2 inline-block rounded-xl border border-cyan-200/20">Admin Panel</Link>
-              </div>
-            )}
+                <div className="mt-2 flex flex-col gap-2">
+                  <Link to="/interstellar" className="px-3 py-2 inline-block rounded-xl border border-cyan-200/20">Interstellar</Link>
+                  {me.role === 'admin' ? (
+                    <Link to="/admin" className="px-3 py-2 inline-block rounded-xl border border-cyan-200/20">Admin Panel</Link>
+                  ) : null}
+                </div>
           </div>
         )}
         {callSummary && (

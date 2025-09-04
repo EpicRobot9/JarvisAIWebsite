@@ -35,6 +35,14 @@ export default function Admin() {
           nav('/signin')
           return
         }
+        
+        // Check if admin should be redirected to Interstellar admin interface
+        // Only redirect if there's no specific admin task in the URL and no stay parameter
+        const urlParams = new URLSearchParams(window.location.search)
+        if (window.location.pathname === '/admin' && !urlParams.has('stay')) {
+          nav('/admin/interstellar')
+          return
+        }
   const s = await fetch('/api/admin/settings', { credentials: 'include' })
   if (s.ok) setSettings(await s.json())
         const k = await fetch('/api/admin/keys', { credentials: 'include', cache: 'no-store' }).catch(()=>null)
@@ -228,7 +236,7 @@ export default function Admin() {
         <h1 className="text-xl font-semibold text-cyan-300">Admin Panel</h1>
         <div className="flex gap-2 text-sm">
           <Link to="/" className="px-3 py-2 rounded-xl border border-cyan-200/20">Home</Link>
-          <Link to="/portal" className="px-3 py-2 rounded-xl border border-cyan-200/20">Portal</Link>
+          <Link to="/admin/interstellar" className="px-3 py-2 rounded-xl border border-cyan-200/20">Interstellar Admin</Link>
         </div>
       </div>
       {loading && <div>Loading…</div>}
