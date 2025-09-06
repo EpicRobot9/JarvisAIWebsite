@@ -49,3 +49,6 @@ services:
 
 volumes:
   db_data:
+    # Pin to a stable name so data persists even if COMPOSE_PROJECT_NAME or folder changes
+    # Override with DB_VOLUME_NAME in .env if you already have an existing named volume to reuse
+    name: ${DB_VOLUME_NAME:-jarvis_db_data}

@@ -7,24 +7,31 @@ if [ -z "$DATABASE_URL" ]; then
   exit 1
 fi
 
-# Install production deps are already present; ensure prisma binaries are ready
+# Ensure prisma client/binaries are ready
 npx prisma generate >/dev/null 2>&1 || true
 
-# Try to wait for DB (simple loop)
+# Apply schema: use migrate deploy in production; db push in non-prod
+SCHEMA_CMD="npx prisma db push"
+if [ "${NODE_ENV:-production}" = "production" ]; then
+  SCHEMA_CMD="npx prisma migrate deploy"
+fi
+
+# Try to wait for DB and apply schema (simple loop)
 ATTEMPTS=0
-until npx prisma db push >/dev/null 2>&1; do
+until sh -c "$SCHEMA_CMD" >/dev/null 2>&1; do
   ATTEMPTS=$((ATTEMPTS+1))
   if [ "$ATTEMPTS" -ge 15 ]; then
     echo "ERROR: Could not connect/apply schema to database after $ATTEMPTS attempts" >&2
-    npx prisma db push # show last error
+    # show last error for diagnostics
+    sh -c "$SCHEMA_CMD"
     exit 1
   fi
-  echo "Database not ready yet. Retrying in 2s... ($ATTEMPTS)"
+  echo "Database not ready yet or schema apply failed. Retrying in 2s... ($ATTEMPTS)"
   sleep 2
 done
 
-# Seed if defined
-if [ -n "$SEED_DB" ]; then
+# Seed only when explicitly enabled
+if [ "${SEED_DB:-false}" = "true" ]; then
   echo "Seeding database..."
   npm run db:seed || true
 fi

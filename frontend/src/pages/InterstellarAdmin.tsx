@@ -35,6 +35,11 @@ export default function InterstellarAdmin() {
   const [codespaceData, setCodespaceData] = useState<CodespaceData | null>(null)
   const [processing, setProcessing] = useState('')
   const [success, setSuccess] = useState('')
+  const [startingAll, setStartingAll] = useState(false)
+  const [stoppingAll, setStoppingAll] = useState(false)
+  const [swapping, setSwapping] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [blockingCodespace, setBlockingCodespace] = useState<string | null>(null)
 
   useEffect(() => {
     ;(async () => {
@@ -169,6 +174,133 @@ export default function InterstellarAdmin() {
     }
   }
 
+  async function startAll() {
+    try {
+      setStartingAll(true)
+      setError('')
+      setSuccess('')
+      const env = isProd ? 'prod' : 'test'
+      const r = await fetch('/api/interstellar/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ action: 'Start', env })
+      })
+      if (!r.ok) {
+        const errorData = await r.json().catch(() => ({}))
+        if (errorData.error === 'post_url_not_configured') {
+          throw new Error('❌ Error: Webhook URLs not configured. Please configure them first.')
+        }
+        throw new Error(`Failed to start codespaces: ${r.status}`)
+      }
+      const result = await r.json()
+      setSuccess('✅ Start All operation completed successfully!')
+      await fetchCodespaces()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setStartingAll(false)
+    }
+  }
+
+  async function stopAll() {
+    try {
+      setStoppingAll(true)
+      setError('')
+      setSuccess('')
+      const env = isProd ? 'prod' : 'test'
+      const r = await fetch('/api/interstellar/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ action: 'Stop', env })
+      })
+      if (!r.ok) {
+        const errorData = await r.json().catch(() => ({}))
+        if (errorData.error === 'post_url_not_configured') {
+          throw new Error('❌ Error: Webhook URLs not configured. Please configure them first.')
+        }
+        throw new Error(`Failed to stop codespaces: ${r.status}`)
+      }
+      const result = await r.json()
+      setSuccess('✅ Stop All operation completed successfully!')
+      await fetchCodespaces()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setStoppingAll(false)
+    }
+  }
+
+  async function swapCodespaces() {
+    if (!confirm('This will swap current and backup codespaces. Continue?')) {
+      return
+    }
+    try {
+      setSwapping(true)
+      setError('')
+      setSuccess('')
+      const env = isProd ? 'prod' : 'test'
+      const r = await fetch('/api/interstellar/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ action: 'Swap', env })
+      })
+      if (!r.ok) {
+        const errorData = await r.json().catch(() => ({}))
+        if (errorData.error === 'post_url_not_configured') {
+          throw new Error('❌ Error: Webhook URLs not configured. Please configure them first.')
+        }
+        throw new Error(`Failed to swap codespaces: ${r.status}`)
+      }
+      const result = await r.json()
+      setSuccess('✅ Swap operation completed successfully!')
+      await fetchCodespaces()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSwapping(false)
+    }
+  }
+
+  async function blockCodespace(fullName: string) {
+    if (!fullName) return
+    
+    if (!confirm(`Are you sure you want to block "${fullName}"? This will immediately remove it from the system.`)) {
+      return
+    }
+    
+    try {
+      setBlockingCodespace(fullName)
+      setError('')
+      setSuccess('')
+      const env = isProd ? 'prod' : 'test'
+      
+      const r = await fetch('/api/interstellar/block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ fullName, env })
+      })
+      
+      if (!r.ok) {
+        const errorData = await r.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to block codespace: ${r.status}`)
+      }
+      
+      const data = await r.json()
+      if (data.blocked) {
+        setSuccess(`✅ Successfully blocked "${fullName}"`)
+        await fetchCodespaces()
+      }
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setBlockingCodespace(null)
+    }
+  }
+
   if (loading) return (
     <div className="p-4 text-center">
       <div>Loading admin panel...</div>
@@ -196,10 +328,10 @@ export default function InterstellarAdmin() {
         </div>
         <div className="flex gap-2">
           <Link to="/admin?stay=true" className="px-3 py-2 rounded-xl border border-cyan-200/20 text-sm">
-            Back to Admin
+            ← Back to Admin Panel
           </Link>
           <Link to="/interstellar" className="px-3 py-2 rounded-xl border border-cyan-200/20 text-sm">
-            Manager View
+            User Manager View
           </Link>
           <label className="inline-flex items-center cursor-pointer">
             <input
@@ -245,17 +377,35 @@ export default function InterstellarAdmin() {
       {/* Action Controls */}
       <div className="glass rounded-2xl p-4 mb-6">
         <h2 className="text-lg font-semibold mb-3 text-cyan-300">Actions</h2>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <button
             className="px-4 py-2 rounded-xl border border-cyan-200/20 disabled:opacity-50"
             onClick={fetchCodespaces}
-            disabled={loading || !!processing}>
-            Refresh Codespaces
+            disabled={loading || !!processing || refreshing}>
+            {refreshing ? 'Refreshing...' : 'Refresh Codespaces'}
+          </button>
+          <button
+            className="px-4 py-2 rounded-xl border border-green-500/30 text-green-300 hover:bg-green-500/10 disabled:opacity-50"
+            onClick={startAll}
+            disabled={loading || !!processing || startingAll || stoppingAll || swapping}>
+            {startingAll ? 'Starting All...' : 'Start All'}
+          </button>
+          <button
+            className="px-4 py-2 rounded-xl border border-red-500/30 text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+            onClick={stopAll}
+            disabled={loading || !!processing || startingAll || stoppingAll || swapping}>
+            {stoppingAll ? 'Stopping All...' : 'Stop All'}
+          </button>
+          <button
+            className="px-4 py-2 rounded-xl border border-blue-500/30 text-blue-300 hover:bg-blue-500/10 disabled:opacity-50"
+            onClick={swapCodespaces}
+            disabled={loading || !!processing || startingAll || stoppingAll || swapping}>
+            {swapping ? 'Swapping...' : 'Swap Codespaces'}
           </button>
           <button
             className="px-4 py-2 rounded-xl border border-green-500/30 text-green-300 hover:bg-green-500/10 disabled:opacity-50 font-semibold"
             onClick={createNewBackup}
-            disabled={loading || !!processing}>
+            disabled={loading || !!processing || startingAll || stoppingAll || swapping}>
             {processing === 'NewBackUp' ? 'Creating New Backups...' : 'Create New Backups'}
           </button>
         </div>
@@ -291,6 +441,24 @@ export default function InterstellarAdmin() {
                           </div>
                         )}
                       </div>
+                      <button
+                        onClick={() => blockCodespace(cs.full_codespace_name)}
+                        className="ml-3 px-3 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 border border-red-400/20 text-red-300 rounded disabled:opacity-50"
+                        title="Block this codespace immediately"
+                        disabled={blockingCodespace === cs.full_codespace_name}
+                      >
+                        {blockingCodespace === cs.full_codespace_name ? (
+                          <span className="flex items-center gap-1">
+                            <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                            </svg>
+                            Blocking...
+                          </span>
+                        ) : (
+                          '🚫 Block'
+                        )}
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -329,6 +497,24 @@ export default function InterstellarAdmin() {
                           </div>
                         )}
                       </div>
+                      <button
+                        onClick={() => blockCodespace(cs.full_codespace_name)}
+                        className="ml-3 px-3 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 border border-red-400/20 text-red-300 rounded disabled:opacity-50"
+                        title="Block this codespace immediately"
+                        disabled={blockingCodespace === cs.full_codespace_name}
+                      >
+                        {blockingCodespace === cs.full_codespace_name ? (
+                          <span className="flex items-center gap-1">
+                            <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                            </svg>
+                            Blocking...
+                          </span>
+                        ) : (
+                          '🚫 Block'
+                        )}
+                      </button>
                     </div>
                   </div>
                 ))}

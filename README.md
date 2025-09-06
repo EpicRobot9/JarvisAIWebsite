@@ -86,6 +86,7 @@ See more in `docs/DEPLOYMENT.md`.
 - Default admin (development):
 	- Username: `admin`
 	- Password: `changeme` (override with `ADMIN_DEFAULT_PASSWORD`)
+	- In production, the bootstrap default is also `changeme` unless you set `ADMIN_DEFAULT_PASSWORD`.
 	- This user is ensured automatically when `SEED_DB=true` (enabled in docker-compose). You can set `ADMIN_USERNAMES` to a comma‑separated list; default includes `admin`.
 	- If the user already exists, the seeder will set the role to admin, mark status active, and reset the password to the default.
 	- Password behavior: `ADMIN_SEED_MODE=ensure` (default) keeps existing passwords; set `ADMIN_SEED_MODE=reset` to force resetting to `ADMIN_DEFAULT_PASSWORD`.

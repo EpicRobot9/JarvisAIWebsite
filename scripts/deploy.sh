@@ -81,6 +81,9 @@ ELEVENLABS_VOICE_ID=7dxS4V4NqL8xqL4PSiMp
 REQUIRE_ADMIN_APPROVAL=false
 LOCK_NEW_ACCOUNTS=false
 ADMIN_EMAILS=admin@example.com
+# Default admin bootstrap settings for production
+ADMIN_DEFAULT_PASSWORD=changeme
+ADMIN_SEED_MODE=ensure
 SEED_DB=true
 VITE_WEBHOOK_URL=
 VITE_WEBHOOK_TEST_URL=
