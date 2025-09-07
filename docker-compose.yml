@@ -27,7 +27,7 @@ services:
       - ADMIN_DEFAULT_PASSWORD=${ADMIN_DEFAULT_PASSWORD:-changeme}
       - ADMIN_SEED_MODE=${ADMIN_SEED_MODE:-ensure}
       - INTEGRATION_PUSH_TOKEN=${INTEGRATION_PUSH_TOKEN:-prod-xyz-123}
-  - SEED_DB=${SEED_DB:-true}
+      - SEED_DB=${SEED_DB:-true}
       - NODE_ENV=production
     depends_on:
       - db
