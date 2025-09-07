@@ -1,3 +1,4 @@
+version: "3.9"
 services:
   db:
     # Override the default named volume with a host bind mount for rock‑solid persistence
