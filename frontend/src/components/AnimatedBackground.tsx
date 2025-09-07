@@ -75,7 +75,8 @@ export default function AnimatedBackground({
 
   const resize = () => {
     const c = canvasRef.current!
-    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1))
+  const perf = (() => { try { return JSON.parse(localStorage.getItem('ux_perf_mode') || 'false') } catch { return false } })()
+  const dpr = perf ? 1 : Math.max(1, Math.min(2, window.devicePixelRatio || 1))
     const { clientWidth: w, clientHeight: h } = c
     if (c.width !== Math.floor(w * dpr) || c.height !== Math.floor(h * dpr)) {
       c.width = Math.floor(w * dpr)
@@ -113,7 +114,7 @@ export default function AnimatedBackground({
   return (
     <canvas
       ref={canvasRef}
-  className={`absolute inset-0 h-full w-full pointer-events-none [filter:contrast(115%)_saturate(125%)] ${className}`}
+  className={`absolute inset-0 h-full w-full pointer-events-none [filter:contrast(110%)_saturate(115%)] ${className}`}
     />
   )
 }

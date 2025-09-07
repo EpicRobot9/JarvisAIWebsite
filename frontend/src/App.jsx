@@ -5,6 +5,7 @@ import { useRecorder } from './hooks/useRecorder'
 import { WEBHOOK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, CALLBACK_URL, SOURCE_NAME, CHAT_INACTIVITY_RESET_MS } from './lib/config'
 import { storage } from './lib/storage'
 import { Link, useNavigate } from 'react-router-dom'
+import TypewriterText from './components/TypewriterText'
 
 function useUser() {
   const [user, setUser] = useState(null)
@@ -106,6 +107,19 @@ function ChatSheet({ open, onClose, webhookUrl }) {
       window.removeEventListener('focus', onVis)
     }
   }, [open, messages.length])
+
+  // Typewriter settings
+  const [twEnabled, setTwEnabled] = useState(()=>{ try { return JSON.parse(localStorage.getItem('ux_typewriter_enabled')||'false') } catch { return false } })
+  const [twSpeed, setTwSpeed] = useState(()=>{ const v=Number(localStorage.getItem('ux_typewriter_speed_cps')||'35'); return Number.isFinite(v)?v:35 })
+  useEffect(()=>{
+    const sync=()=>{
+      try { setTwEnabled(JSON.parse(localStorage.getItem('ux_typewriter_enabled')||'false')) } catch {}
+      const v=Number(localStorage.getItem('ux_typewriter_speed_cps')||'35'); setTwSpeed(Number.isFinite(v)?v:35)
+    }
+    window.addEventListener('storage', sync)
+    const i=setInterval(sync,500)
+    return ()=>{ window.removeEventListener('storage', sync); clearInterval(i) }
+  },[])
 
   function retryFrom(msg) {
     const text = msg?.origText || messages.find(m => m.role==='user' && m.correlationId===msg?.correlationId)?.content || ''
@@ -280,10 +294,7 @@ function ChatSheet({ open, onClose, webhookUrl }) {
                 <div className="text-sm flex items-center gap-2">
                   <span className="flex-1">
                     {m.role==='assistant' ? (
-                      <>
-                        {/** Render Markdown so links become clickable and styled */}
-                        {React.createElement(require('./components/ui/Markdown').default, { content: m.content || '' })}
-                      </>
+                      <TypewriterText text={m.content || ''} enabled={twEnabled} speedCps={twSpeed} />
                     ) : (
                       <span className="whitespace-pre-wrap">{m.content || (m.pending ? '' : '')}</span>
                     )}
@@ -423,7 +434,7 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto p-4 grid gap-4 md:grid-cols-2">
-        <div className="rounded-2xl glass p-6">
+        <div className="rounded-2xl glass p-6 glow-border">
           <h3 className="text-lg font-semibold mb-2 text-cyan-300">Welcome</h3>
           <p className="jarvis-subtle mb-4">Use the header to open UI Chat or start a Voice recording. Messages go to your n8n webhook with the exact payload fields required.</p>
           {user && (
@@ -434,7 +445,7 @@ export default function App() {
             </div>
           )}
         </div>
-        <div className="rounded-2xl glass p-6">
+        <div className="rounded-2xl glass p-6 glow-border">
           <h3 className="text-lg font-semibold mb-2 text-cyan-300">Live Status</h3>
           <ul className="text-sm jarvis-subtle list-disc ml-5 space-y-1">
             <li>Signed in: {user? 'yes' : 'no'}</li>

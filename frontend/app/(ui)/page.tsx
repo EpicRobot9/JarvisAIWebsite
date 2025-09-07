@@ -13,6 +13,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import CallMode from '../../src/components/CallMode'
 import Markdown from '../../src/components/ui/Markdown'
 import { Play as PlayIcon, Square as StopIcon, Mic as MicIcon, MicOff as MicOffIcon } from 'lucide-react'
+import { EFFECTS } from '../../src/components/effects'
+import TypewriterText from '../../src/components/TypewriterText'
 
 type Me = { id: string; username: string; role: string; status: string } | null
 
@@ -37,6 +39,14 @@ export default function Page() {
   const [callSummary, setCallSummary] = useState<string>('')
   const [ttsLoading, setTtsLoading] = useState<Set<string>>(new Set())
   const [audioReady, setAudioReady] = useState<boolean>(false)
+  // UI/perf toggles (reactive to Settings changes)
+  const [perfMode, setPerfMode] = useState<boolean>(()=>{ try { return JSON.parse(localStorage.getItem('ux_perf_mode') || 'false') } catch { return false } })
+  const [chatBg, setChatBg] = useState<boolean>(()=>{ try { return JSON.parse(localStorage.getItem('ux_chat_bg_enabled') || 'false') } catch { return false } })
+  const [bgStyle, setBgStyle] = useState<string>(()=> localStorage.getItem('ux_bg_style') || 'static')
+  const [resScale, setResScale] = useState<number>(()=>{
+    const v = Number(localStorage.getItem('ux_effects_res_scale') || '1')
+    return Number.isFinite(v) ? Math.max(0.5, Math.min(1, v)) : 1
+  })
 
   // Fetch current user
   useEffect(() => {
@@ -50,6 +60,19 @@ export default function Page() {
       } catch { setMe(null) }
       finally { setLoadingMe(false) }
     })()
+  }, [])
+
+  // Keep perf/chatBg in sync with localStorage updates (from SettingsPanel)
+  useEffect(()=>{
+    const onStorage = () => {
+      try { setPerfMode(JSON.parse(localStorage.getItem('ux_perf_mode') || 'false')) } catch {}
+    try { setChatBg(JSON.parse(localStorage.getItem('ux_chat_bg_enabled') || 'false')) } catch {}
+  try { setBgStyle(localStorage.getItem('ux_bg_style') || 'static') } catch {}
+  try { setResScale(Number(localStorage.getItem('ux_effects_res_scale') || '1')) } catch {}
+    }
+    window.addEventListener('storage', onStorage)
+    const i = setInterval(onStorage, 500)
+    return ()=>{ window.removeEventListener('storage', onStorage); clearInterval(i) }
   }, [])
 
   // Fetch dynamic webhook URLs
@@ -312,6 +335,24 @@ export default function Page() {
 
   const [input, setInput] = useState('')
   const canUse = useMemo(() => !!me && me.status === 'active', [me])
+  const [twEnabled, setTwEnabled] = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem('ux_typewriter_enabled') || 'false') } catch { return false }
+  })
+  const [twSpeed, setTwSpeed] = useState<number>(() => {
+    const v = Number(localStorage.getItem('ux_typewriter_speed_cps') || '35')
+    return Number.isFinite(v) ? v : 35
+  })
+  useEffect(() => {
+    const onStorage = () => {
+      try { setTwEnabled(JSON.parse(localStorage.getItem('ux_typewriter_enabled') || 'false')) } catch {}
+      const v = Number(localStorage.getItem('ux_typewriter_speed_cps') || '35')
+      setTwSpeed(Number.isFinite(v) ? v : 35)
+    }
+    window.addEventListener('storage', onStorage)
+    // Also poll briefly in case SettingsPanel saved in same tab
+    const i = setInterval(onStorage, 500)
+    return () => { window.removeEventListener('storage', onStorage); clearInterval(i) }
+  }, [])
 
   async function signOut() {
     try {
@@ -322,7 +363,8 @@ export default function Page() {
   }
 
   return (
-    <div className="h-screen relative p-4">
+    <div className="h-screen relative p-4 overflow-hidden">
+  {/* Chat UI effects removed per request */}
       {!audioReady && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 glass px-3 py-2 rounded-xl text-sm flex items-center gap-3 border border-yellow-400/30 bg-yellow-900/20">
           <span>Enable audio for voice replies</span>
@@ -332,16 +374,17 @@ export default function Page() {
           >Enable</button>
         </div>
       )}
-      <AnimatePresence initial={false}>
+  <AnimatePresence initial={false}>
         {/* Chat shell */}
-    {session.mode !== 'call' && (
+  {session.mode !== 'call' && (
       <motion.div
             key="chat-shell"
-    className="grid grid-cols-1 md:grid-cols-[260px_1fr_280px] gap-4 h-full"
+  className="grid grid-cols-1 md:grid-cols-[260px_1fr_280px] gap-4 h-full relative z-10"
             initial={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
             animate={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
             exit={{ opacity: 0.4, filter: 'blur(8px)', scale: 0.98, transition: { duration: 0.35, ease: 'easeInOut' } }}
           >
+  {/* No global overlays here—chat overlays are rendered inside the chat panel only */}
       {/* Left sidebar */}
   <aside className="glass rounded-2xl p-4 h-full overflow-y-auto">
         <h2 className="jarvis-title mb-3">J.A.R.V.I.S.</h2>
@@ -380,10 +423,10 @@ export default function Page() {
       </aside>
 
   {/* Main chat */}
-  <main className="glass rounded-2xl p-4 h-full flex flex-col overflow-hidden">
-  <div className="flex-1 overflow-y-auto space-y-2 pr-1" ref={chatScrollRef}>
+  <main className="glass rounded-2xl p-4 h-full flex flex-col overflow-hidden relative">
+  <div className="relative z-10 flex-1 overflow-y-auto space-y-2 pr-1" ref={chatScrollRef}>
           {session.messages.map(m => (
-            <div key={m.id} className="flex items-start gap-2">
+    <div key={m.id} className="flex items-start gap-2 bubble-in">
               {m.role === 'assistant' && (
                 <div className="pt-1">
                   {!session.muted ? (
@@ -432,7 +475,11 @@ export default function Page() {
                 </div>
               )}
               <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${m.role==='user'?'jarvis-bubble-user ml-auto':'jarvis-bubble-ai'}`}>
-                <Markdown content={m.text} />
+                {m.role === 'assistant' ? (
+                  <TypewriterText text={m.text} enabled={twEnabled} speedCps={twSpeed} />
+                ) : (
+                  <Markdown content={m.text} />
+                )}
               </div>
             </div>
           ))}
@@ -545,4 +592,40 @@ export default function Page() {
         {toast && <ErrorToast message={toast} onClose={()=>setToast('')} />}
       </div>
   )
+}
+
+// Super-lightweight canvas host that reuses EFFECTS at low FPS
+function LiteCanvas({ effect, className, scale = 1 }: { effect: keyof typeof EFFECTS; className?: string; scale?: number }) {
+  const ref = useRef<HTMLCanvasElement | null>(null)
+  const cleanupRef = useRef<null | (()=>void)>(null)
+  useEffect(()=>{
+    const c = ref.current
+    if (!c) return
+    // Cap DPR to 1 for cheap draw
+    const resize = () => {
+      const dpr = 1
+      const { clientWidth:w, clientHeight:h } = c
+      const sw = Math.floor(w * Math.max(0.5, Math.min(1, scale)))
+      const sh = Math.floor(h * Math.max(0.5, Math.min(1, scale)))
+      if (c.width !== Math.floor(sw*dpr) || c.height !== Math.floor(sh*dpr)) {
+        c.width = Math.floor(sw*dpr)
+        c.height = Math.floor(sh*dpr)
+        const ctx = c.getContext('2d')!
+        ctx.setTransform(dpr,0,0,dpr,0,0)
+        // Upscale to fit visually while drawing at lower res for performance
+        ctx.imageSmoothingEnabled = true
+      }
+    }
+    resize()
+    const onR = () => resize()
+    window.addEventListener('resize', onR)
+    cleanupRef.current?.()
+    const start = EFFECTS[effect]
+    // Provide minimal ctx
+    const dummyVol = { current: 0 } as React.MutableRefObject<number>
+    const cleanup = start(c, { analyser: { current: null } as any, freqData: { current: null } as any, volumeRef: dummyVol })
+    cleanupRef.current = () => { cleanup(); window.removeEventListener('resize', onR) }
+    return cleanupRef.current
+  }, [effect])
+  return <canvas ref={ref} className={className} />
 }

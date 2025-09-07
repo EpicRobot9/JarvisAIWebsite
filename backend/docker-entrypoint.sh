@@ -36,5 +36,27 @@ if [ "${SEED_DB:-false}" = "true" ]; then
   npm run db:seed || true
 fi
 
+# Lightweight diagnostic: log if DB appears empty (no users and no settings)
+# Helps detect unintended resets; harmless in production logs
+node --input-type=module - <<'EOF' || true
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+try {
+  const [uc, sc] = await Promise.all([
+    prisma.user.count().catch(()=>0),
+    prisma.setting.count().catch(()=>0),
+  ]);
+  if ((uc === 0) && (sc === 0)) {
+    console.warn('[entrypoint] Warning: database appears empty (0 users, 0 settings). If this was not expected, check volume persistence and SEED_DB/ADMIN_SEED_MODE.');
+  } else {
+    console.log(`[entrypoint] DB ready. users=${uc}, settings=${sc}`);
+  }
+} catch (e) {
+  console.log('[entrypoint] DB diagnostics skipped:', e?.message || String(e));
+} finally {
+  await prisma.$disconnect().catch(()=>{});
+}
+EOF
+
 # Start the server
 exec node dist/server.js

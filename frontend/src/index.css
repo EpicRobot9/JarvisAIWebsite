@@ -61,6 +61,13 @@ body {
 	background-attachment: fixed;
 	/* Ensure layers cover the viewport nicely */
 	background-size: cover, cover, cover;
+	/* Subtle overall fade-in on load */
+	animation: body-fade-in 600ms ease-out;
+}
+
+@keyframes body-fade-in {
+	from { opacity: 0; filter: saturate(0.9) blur(2px); }
+	to { opacity: 1; filter: saturate(1) blur(0); }
 }
 
 .glass {
@@ -70,6 +77,12 @@ body {
 	border: 1px solid var(--jarvis-border);
 	box-shadow: var(--jarvis-glow);
 	border-radius: 18px;
+	transition: transform .25s ease, box-shadow .25s ease, background .25s ease;
+}
+
+.glass:hover {
+	transform: translateY(-1px);
+	box-shadow: 0 0 0 1px rgba(93,232,255,0.3), 0 12px 36px rgba(93,232,255,0.18);
 }
 
 .sparkles {
@@ -81,6 +94,25 @@ body {
 		radial-gradient(2px 2px at 80% 40%, rgba(93,232,255,0.35), transparent),
 		radial-gradient(2px 2px at 40% 70%, rgba(93,232,255,0.25), transparent),
 		radial-gradient(2px 2px at 60% 20%, rgba(93,232,255,0.3), transparent);
+	animation: sparkles-flicker 4s ease-in-out infinite;
+}
+
+/* Sparkles variant for use inside a container (absolute instead of fixed) */
+.sparkles-panel {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background-image:
+		radial-gradient(2px 2px at 20% 30%, rgba(93,232,255,0.5), transparent),
+		radial-gradient(2px 2px at 80% 40%, rgba(93,232,255,0.35), transparent),
+		radial-gradient(2px 2px at 40% 70%, rgba(93,232,255,0.25), transparent),
+		radial-gradient(2px 2px at 60% 20%, rgba(93,232,255,0.3), transparent);
+	animation: sparkles-flicker 4s ease-in-out infinite;
+}
+
+@keyframes sparkles-flicker {
+	0%, 100% { opacity: 0.6; }
+	50% { opacity: 1; }
 }
 
 /* Jarvis UI atoms */
@@ -110,13 +142,25 @@ body {
 	color: var(--fg);
 }
 .jarvis-btn:hover { background: rgba(255,255,255,0.1); }
+.jarvis-btn:active { transform: translateY(1px); }
 .jarvis-btn-primary {
 	color: #fff;
 	background: linear-gradient(180deg, var(--jarvis-blue), #1748c8);
 	box-shadow: 0 6px 24px rgba(37, 99, 235, 0.4), 0 0 0 1px rgba(59,130,246,0.35) inset;
 	border-color: rgba(59,130,246,0.35);
+	position: relative;
+	overflow: hidden;
 }
 .jarvis-btn-primary:hover { filter: brightness(1.05); }
+.jarvis-btn-primary::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(120deg, rgba(255,255,255,0), rgba(255,255,255,0.18), rgba(255,255,255,0));
+	transform: translateX(-120%);
+	transition: transform .6s ease;
+}
+.jarvis-btn-primary:hover::before { transform: translateX(120%); }
 .jarvis-btn:focus-visible,
 .jarvis-input:focus-visible {
 	outline: none;
@@ -131,7 +175,10 @@ body {
 	width: 100%;
 	background: rgba(255,255,255,0.06);
 	color: var(--fg);
+	transition: box-shadow .2s ease, transform .15s ease;
 }
+.jarvis-input:hover { background: rgba(255,255,255,0.08); }
+.jarvis-input:active { transform: translateY(1px); }
 
 /* Chat bubbles */
 .jarvis-bubble-user {
@@ -188,3 +235,49 @@ body {
 .markdown a.jarvis-link:hover {
 	filter: brightness(1.08);
 }
+
+/* Utility animations for message bubbles */
+.bubble-in {
+	animation: bubble-in 360ms cubic-bezier(.22,.61,.36,1) both;
+}
+@keyframes bubble-in {
+	from { opacity: 0; transform: translateY(6px) scale(.98); filter: blur(3px); }
+	to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+}
+
+/* Subtle animated gradient border helper */
+.glow-border {
+	position: relative;
+}
+.glow-border::after {
+	content: "";
+	position: absolute;
+	inset: -1px;
+	border-radius: inherit;
+	background: conic-gradient(from 180deg at 50% 50%, rgba(93,232,255,0.25), rgba(59,130,246,0.2), rgba(93,232,255,0.25));
+	filter: blur(14px);
+	opacity: 0.35;
+	z-index: -1;
+	animation: spin-slow 10s linear infinite;
+}
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+
+/* Respect user reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
+
+/* Typewriter caret */
+.tw-caret {
+	display: inline-block;
+	margin-left: 2px;
+	color: var(--jarvis-cyan);
+	opacity: 0.9;
+	animation: tw-blink 1s steps(1) infinite;
+}
+@keyframes tw-blink { 0%, 50% { opacity: 0.9; } 50.01%, 100% { opacity: 0.1; } }

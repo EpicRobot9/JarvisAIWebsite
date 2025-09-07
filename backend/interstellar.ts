@@ -228,18 +228,22 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
     const codespacesUrl = `${getUrl}?TypeOfInfo=Sheets`
     console.log('🎯 GET URL for codespaces:', codespacesUrl)
     
-    const r = await fetch(codespacesUrl, {
+  const r = await fetch(codespacesUrl, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' }
     })
     if (!r.ok) {
       // Codespaces request failed, but we'll still try to get status
       if (r.status === 404 || r.status === 500 || r.status === 502 || r.status === 503) {
-        codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+    const bodyTxt = await r.text().catch(()=>'')
+    console.log('⚠️ Interstellar GET codespaces failed', { url: codespacesUrl, status: r.status, bodyPreview: bodyTxt?.slice?.(0, 500) })
+    codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
         data = { CurrentCodespaces: [], BackUpCodespaces: [] }
         console.log('🔧 Using fallback data due to webhook unavailable:', JSON.stringify(data, null, 2))
       } else {
-        return res.status(502).json({ error: 'fetch_failed', status: r.status })
+    const bodyTxt = await r.text().catch(()=>'')
+    console.log('⚠️ Interstellar GET codespaces fetch_failed', { url: codespacesUrl, status: r.status, bodyPreview: bodyTxt?.slice?.(0, 500) })
+    return res.status(502).json({ error: 'fetch_failed', status: r.status })
       }
     } else {
       data = await r.json()
@@ -285,67 +289,9 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
       console.log('🎯 Normalized data with public_url fields:', JSON.stringify(data, null, 2))
     }
     
-    // Now, get the status information
-    console.log('🔍 Starting status request attempt...')
-    let statusData = {}
-    try {
-      // Status is also a GET request with TypeOfInfo=Status query parameter
-      const statusUrl = `${getUrl}?TypeOfInfo=Status`
-      console.log('🎯 GET Status URL:', statusUrl)
-      
-      const statusResponse = await fetch(statusUrl, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
-      })
-        console.log('Status response status:', statusResponse.status)
-        if (statusResponse.ok) {
-          const statusResult = await statusResponse.json()
-          console.log('🔍 Raw Status result:', JSON.stringify(statusResult, null, 2))
-          
-          statusData = {}
-          
-          if (Array.isArray(statusResult) && statusResult.length > 0) {
-            // Handle array format: [{"CurrentStatus": [{"codespace1": "status1"}, {"codespace2": "status2"}]}]
-            if (statusResult[0].CurrentStatus && Array.isArray(statusResult[0].CurrentStatus)) {
-              statusResult[0].CurrentStatus.forEach((item: any) => {
-                if (typeof item === 'object' && item !== null) {
-                  Object.assign(statusData, item)
-                }
-              })
-              console.log('🔍 Merged status data from CurrentStatus array (wrapped in array):', JSON.stringify(statusData, null, 2))
-            }
-            // Handle old array format: [{"codespace1": "status1"}, {"codespace2": "status2"}]
-            else {
-              statusResult.forEach((item: any) => {
-                if (typeof item === 'object' && item !== null && !item.CurrentStatus) {
-                  Object.assign(statusData, item)
-                }
-              })
-              console.log('🔍 Merged status data from direct array:', JSON.stringify(statusData, null, 2))
-            }
-          } else if (statusResult && typeof statusResult === 'object') {
-            // Handle direct object with CurrentStatus: {"CurrentStatus": [{"codespace1": "status1"}, {"codespace2": "status2"}]}
-            if ((statusResult as any).CurrentStatus && Array.isArray((statusResult as any).CurrentStatus)) {
-              (statusResult as any).CurrentStatus.forEach((item: any) => {
-                if (typeof item === 'object' && item !== null) {
-                  Object.assign(statusData, item)
-                }
-              })
-              console.log('🔍 Merged status data from CurrentStatus array (direct object):', JSON.stringify(statusData, null, 2))
-            }
-            // Handle direct object format: {"codespace1": "status1", "codespace2": "status2"}
-            else {
-              statusData = statusResult
-              console.log('🔍 Using status data (direct object):', JSON.stringify(statusData, null, 2))
-            }
-          }
-        } else {
-          console.log('Status response not ok:', await statusResponse.text().catch(() => 'Failed to read response'))
-        }
-    } catch (e) {
-      // If status request fails, continue without status data
-      console.log('Status request failed:', e)
-    }
+  // Use Sheets info only for both prod and test; skip separate Status fetch
+  // This avoids inconsistencies across environments and reduces external errors.
+  let statusData = {}
     
     // Handle both array and direct object responses from n8n
     let responseData
@@ -418,7 +364,11 @@ router.post('/api/interstellar/control', async (req: any, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
-    if (!r.ok) return res.status(502).json({ error: 'forward_failed', status: r.status })
+    if (!r.ok) {
+      const txt = await r.text().catch(()=>'')
+      console.log('⚠️ Interstellar control forward_failed', { url: postUrl, status: r.status, bodyPreview: txt?.slice?.(0, 500) })
+      return res.status(502).json({ error: 'forward_failed', status: r.status })
+    }
     const txt = await r.text().catch(()=>'')
     return res.json({ ok: true, body: txt })
   } catch (e) {
@@ -445,7 +395,11 @@ router.post('/api/interstellar/block', requireAuth, async (req: any, res) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      if (!r.ok) return res.status(502).json({ error: 'forward_failed', status: r.status })
+      if (!r.ok) {
+        const txt = await r.text().catch(()=>"")
+        console.log('⚠️ Interstellar block forward_failed', { url: postUrl, status: r.status, bodyPreview: txt?.slice?.(0, 500) })
+        return res.status(502).json({ error: 'forward_failed', status: r.status })
+      }
       const txt = await r.text().catch(()=>'')
       return res.json({ ok: true, blocked: true, body: txt })
     } else {

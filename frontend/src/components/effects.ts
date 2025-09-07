@@ -20,10 +20,25 @@ function withLoop(
   const ctx = canvas.getContext("2d")!
   let start = performance.now()
   let raf = 0,
-    stop = false
+    stop = false,
+    lastDraw = 0
+  const getFps = () => {
+    const raw = Number(localStorage.getItem('ux_effects_fps') || '30')
+    if (!Number.isFinite(raw)) return 60
+    return Math.max(12, Math.min(60, raw))
+  }
 
   function loop(now: number) {
     if (stop) return
+    // If tab not visible, skip heavy drawing work
+    if (typeof document !== 'undefined' && (document as any).hidden) {
+      raf = requestAnimationFrame(loop)
+      return
+    }
+    const fps = getFps()
+    const minDelta = 1000 / fps
+    if (now - lastDraw < minDelta) { raf = requestAnimationFrame(loop); return }
+    lastDraw = now
     const t = (now - start) / 1000
     const w = canvas.clientWidth,
       h = canvas.clientHeight
@@ -213,21 +228,20 @@ const dualEnergyRibbon: FX = (canvas, { volumeRef }) =>
 
 // --- Neon Pulses (concentric rings, breath on beat) ---
 export const neonPulses: FX = (canvas) => withLoop(canvas, (ctx, t, w, h, beat, ts) => {
-  const cx=w/2, cy=h/2, base=Math.min(w,h)*0.25*(1+beat*0.2), rings=11;
+  const cx=w/2, cy=h/2;
+  // Larger base for fuller coverage, scaled by the smaller dimension
+  const base=Math.min(w,h)*0.42*(1+beat*0.12);
+  const rings=14;
   for(let i=0;i<rings;i++){
-    const p=i/rings, r=base + p*base*1.1 + Math.sin(t*2*ts+p*6.283)*base*(0.1+beat*0.2);
-    const hue=195+Math.sin(t*0.8+i)*35;
+    const p=i/(rings-1);
+    // Range spans farther to the edges with gentle breathing
+    const r=base + p*base*1.35 + Math.sin(t*1.6*ts+p*6.283)*base*(0.08+beat*0.18);
+    const hue=195+Math.sin(t*0.6+i*0.4)*28;
     ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
-    ctx.strokeStyle=`hsla(${hue},100%,${65-p*35}%,${0.7-p*0.5})`;
-    ctx.lineWidth=2+(1-p)*4+beat*3; ctx.shadowColor=`hsla(${hue},100%,60%,0.9)`;
-    ctx.shadowBlur=20+(1-p)*22+beat*20; ctx.stroke();
+    ctx.strokeStyle=`hsla(${hue},100%,${60-p*30}%,${0.65-p*0.45})`;
+    ctx.lineWidth=2.2+(1-p)*5.5+beat*2.6; ctx.shadowColor=`hsla(${hue},100%,60%,0.9)`;
+    ctx.shadowBlur=26+(1-p)*26+beat*18; ctx.stroke();
   }
-  // rotating tick ring
-  ctx.save(); ctx.translate(cx,cy); ctx.rotate(t*0.8*ts);
-  for(let i=0;i<72;i++){ const a=(i/72)*Math.PI*2, r1=base*0.7, r2=r1+10+Math.sin(t*3+i)*8*(1+beat);
-    ctx.beginPath(); ctx.moveTo(Math.cos(a)*r1,Math.sin(a)*r1); ctx.lineTo(Math.cos(a)*r2,Math.sin(a)*r2);
-    ctx.strokeStyle="rgba(56,189,248,0.8)"; ctx.lineWidth=1.2; ctx.stroke();
-  } ctx.restore();
 });
 
 // --- Particle Orbitals (swarming dots) ---

@@ -49,6 +49,8 @@ INTEGRATION_PUSH_TOKEN=generate-a-long-random-token
 Notes
 - Set `FRONTEND_ORIGIN` to your final HTTPS origin so cookies/CORS line up.
 - After the first bootstrapped admin login, set `SEED_DB=false`.
+- Ensure `ADMIN_SEED_MODE=ensure` for steady‑state (it won't reset passwords on future restarts).
+- Persistence: by default we use a stable named volume `jarvis_db_data`. To hard‑pin data to a host path, use the optional persist override below.
 
 ## 2) Start the app without binding host ports
 
@@ -62,6 +64,21 @@ docker compose -p techexplore \
 ```
 
 - The stack runs on an internal Docker network only. No host port usage.
+
+Optional: pin Postgres data to a host path (rock‑solid persistence)
+
+If you want DB files on a specific folder (e.g., for backups), add the persist override:
+
+```
+DB_DATA_DIR=/opt/jarvis/db \
+docker compose -p techexplore \
+  -f docker-compose.yml \
+  -f docker-compose.prod.yml \
+  -f docker-compose.persist.yml \
+  up -d --build
+```
+
+This bind‑mounts Postgres data to `/opt/jarvis/db` on the host. Without this, a named volume `jarvis_db_data` is used, which is still persistent but can be replaced if you change `COMPOSE_PROJECT_NAME` or run `down --volumes`.
 
 Shortcut (one-liner) installer
 
@@ -233,6 +250,13 @@ docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml u
 # One-time: set a known admin password and print summary
 ./scripts/update.sh --admin-user admin --admin-password 'Admin123!' --admin-reset once
 ```
+
+Troubleshooting: data appears to “reset”
+
+- Check whether the DB volume changed. If you used different project names (the `-p` flag) across runs, Docker created separate volume namespaces. Fix: always use a stable `-p techexplore` and/or set an explicit volume name via `DB_VOLUME_NAME` in `.env`, or use `docker-compose.persist.yml` with `DB_DATA_DIR`.
+- Verify `.env` does not keep `ADMIN_SEED_MODE=reset` or `SEED_DB=true` unintentionally. Reset mode will update admin password every boot; seeding itself does not delete users, but if the DB is empty at start you’ll see a brand new admin created that minute.
+- After backend starts, the entrypoint logs either `DB ready. users=..., settings=...` or a warning when it detects an empty DB. If you see the empty warning on a restart, your DB files were not persisted.
+- Avoid `docker compose down --volumes` unless you intentionally want to erase the database.
 
 The update script prints the admin username(s) and, when in reset mode, the exact password you can use to sign in.
 

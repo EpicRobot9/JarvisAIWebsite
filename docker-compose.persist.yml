@@ -1,0 +1,6 @@
+services:
+  db:
+    # Override the default named volume with a host bind mount for rock‑solid persistence
+    # Set DB_DATA_DIR to an absolute path on the server (e.g., /opt/jarvis/db)
+    volumes:
+      - ${DB_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
