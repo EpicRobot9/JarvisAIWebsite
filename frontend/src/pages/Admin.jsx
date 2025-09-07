@@ -50,7 +50,7 @@ export default function Admin() {
   const wu = await fetch('/api/admin/webhook-urls', { credentials: 'include', cache: 'no-store' }).catch(()=>null)
   if (wu?.ok) setWebhookUrls(await wu.json())
         // Load settings and users
-        const u = await fetch('/api/admin/users', { credentials: 'include' })
+  const u = await fetch('/api/admin/users', { credentials: 'include', cache: 'no-store' })
         if (!u.ok) throw new Error(`Failed to load users: ${u.status}`)
         setUsers(await u.json())
         // Load pending for quick approvals inline

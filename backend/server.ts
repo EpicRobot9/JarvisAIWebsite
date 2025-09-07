@@ -511,8 +511,17 @@ app.post('/api/admin/webhook-urls', requireAuth, requireAdmin, async (req, res) 
 app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   // Temporary: cast to any for username select until Prisma types include username
   const users = await (prisma as any).user.findMany({
-    select: { id: true, username: true, role: true, status: true, createdAt: true }
+    select: { id: true, username: true, role: true, status: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
   })
+  // Prevent browser/proxy caching so lists are always fresh in admin
+  res.set('Cache-Control', 'no-store')
+  try {
+    const count = Array.isArray(users) ? users.length : 0
+    const newest = count ? users[0]?.createdAt : null
+    const oldest = count ? users[users.length - 1]?.createdAt : null
+    console.log(`[admin/users] count=${count} newest=${newest?.toISOString?.() || newest} oldest=${oldest?.toISOString?.() || oldest}`)
+  } catch {}
   res.json(users)
 })
 
