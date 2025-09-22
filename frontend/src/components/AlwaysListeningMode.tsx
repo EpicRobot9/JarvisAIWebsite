@@ -36,6 +36,7 @@ export default function AlwaysListeningMode({ userId, sessionId, useTestWebhook,
   const [noteIdForSession, setNoteIdForSession] = useState<string | null>(null)
   const [notesTranscript, setNotesTranscript] = useState('')
   const [notesInterim, setNotesInterim] = useState('')
+  const [notesTitle, setNotesTitle] = useState<string>('Call Notes')
   const [showVadOverlay, setShowVadOverlay] = useState<boolean>(() => {
     try { return localStorage.getItem('jarvis_debug_vad') === 'true' } catch { return false }
   })
@@ -141,6 +142,10 @@ export default function AlwaysListeningMode({ userId, sessionId, useTestWebhook,
       if (cmd.type === 'notes_start' || cmd.type === 'notes_show') {
         setNotesOpen(true)
         setNotesPaused(false)
+        // Begin capturing immediately so the transcript reflects the user's speech right away
+        try {
+          await alwaysListening.startImmediateRecording()
+        } catch {}
         return { handled: true, speak: 'Starting notes. I will capture your transcript on the right.' }
       }
       if (cmd.type === 'notes_pause') {
@@ -298,10 +303,10 @@ export default function AlwaysListeningMode({ userId, sessionId, useTestWebhook,
         if (noteIdForSession) {
           // Lazy import to avoid circular import warnings
           const { updateNote } = await import('../lib/api')
-          await updateNote(noteIdForSession, { transcript: text, notes })
+          await updateNote(noteIdForSession, { transcript: text, notes, title: (notesTitle || 'Call Notes').trim() })
         } else {
           const { createNote } = await import('../lib/api')
-          const created = await createNote({ transcript: text, notes, title: 'Call Notes' })
+          const created = await createNote({ transcript: text, notes, title: (notesTitle || 'Call Notes').trim() })
           setNoteIdForSession(created.id)
         }
       } catch {}
@@ -641,6 +646,8 @@ export default function AlwaysListeningMode({ userId, sessionId, useTestWebhook,
         paused={notesPaused}
         onTogglePause={() => setNotesPaused(p => !p)}
         summarizing={notesSummarizing}
+        title={notesTitle}
+        onChangeTitle={setNotesTitle}
       />
 
       {/* Edge handle to reopen transcript when hidden */}

@@ -8,6 +8,8 @@ export default function NotesTranscriptPanel({
   paused,
   onTogglePause,
   summarizing,
+  title,
+  onChangeTitle,
 }: {
   open: boolean
   onClose: () => void
@@ -16,6 +18,8 @@ export default function NotesTranscriptPanel({
   paused: boolean
   onTogglePause: () => void
   summarizing?: boolean
+  title?: string
+  onChangeTitle?: (t: string) => void
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
@@ -32,7 +36,17 @@ export default function NotesTranscriptPanel({
         {/* Header */}
         <div className="px-4 py-3 flex items-center justify-between border-b border-white/10">
           <div className="flex items-center gap-2">
-            <span className="text-slate-200 font-semibold">Transcript</span>
+            {onChangeTitle ? (
+              <input
+                value={title ?? ''}
+                onChange={(e) => onChangeTitle?.(e.target.value)}
+                placeholder="Untitled"
+                className="min-w-0 w-[180px] sm:w-[220px] bg-transparent border-b border-white/20 focus:border-white/40 outline-none text-slate-200 font-semibold placeholder:text-slate-500"
+                aria-label="Note title"
+              />
+            ) : (
+              <span className="text-slate-200 font-semibold">Transcript</span>
+            )}
             {summarizing && (
               <span className="ml-2 text-xs text-amber-300">Summarizing…</span>
             )}

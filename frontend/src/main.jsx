@@ -12,7 +12,7 @@ import InterstellarAdmin from './pages/InterstellarAdmin'
 import Page from '../app/(ui)/page'
 import JarvisNotes from './pages/JarvisNotes'
 import NotesSettings from './pages/NotesSettings'
-import StudyBuilder from './pages/StudyBuilder'
+import StudyDashboard from './pages/StudyDashboard'
 import StudySetView from './pages/StudySetView'
 import FlashcardsGame from './pages/FlashcardsGame'
 
@@ -27,7 +27,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/interstellar" element={<InterstellarManager />} />
           <Route path="/notes" element={<JarvisNotes />} />
           <Route path="/notes/settings" element={<NotesSettings />} />
-          <Route path="/study" element={<StudyBuilder />} />
+          <Route path="/study" element={<StudyDashboard />} />
           <Route path="/study/sets/:id" element={<StudySetView />} />
           <Route path="/study/sets/:id/flashcards" element={<FlashcardsGame />} />
           <Route path="/signin" element={<SignIn />} />

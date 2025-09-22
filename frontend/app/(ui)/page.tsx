@@ -461,8 +461,8 @@ export default function Page() {
           <Link
             to="/study"
             className="w-full inline-block jarvis-btn text-center"
-            title="Open Study Builder"
-          >Study Builder</Link>
+            title="Open Study Dashboard"
+          >Study Dashboard</Link>
           <div className="flex items-center gap-2 text-xs">
             <span>Webhook:</span>
             <button className={`px-2 py-1 rounded border ${!useTestWebhook?'bg-blue-600 text-white':'border-cyan-200/20'}`} onClick={()=>setUseTestWebhook(false)}>Prod</button>

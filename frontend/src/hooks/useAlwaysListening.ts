@@ -971,6 +971,19 @@ export function useAlwaysListening(opts: {
     wasmActive,
     start,
     stop,
+    // Start a recording immediately (bypass wake word). Useful for features like on-demand notes capture.
+    startImmediateRecording: async () => {
+      try {
+        // Ensure we are not speaking and not already recording
+        if (stateRef.current === 'speaking') {
+          // Let the speech finish naturally; consumers may want to wait for onQueueIdle before calling this
+          return
+        }
+        await startRecording()
+      } catch (e) {
+        console.error('[Always Listening] startImmediateRecording failed:', e)
+      }
+    },
     forceReinitialize,
     resetError: () => setError(null),
     stopRecordingAndProcess,
