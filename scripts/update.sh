@@ -101,7 +101,12 @@ if [[ "$ADMIN_RESET_MODE" != "no" ]]; then
   fi
   set_env ADMIN_DEFAULT_PASSWORD "$PASS_TO_USE"
   set_env ADMIN_SEED_MODE "reset"
-  set_env SEED_DB "true"
+  # Trigger seeding: persist for 'always', export for one-off otherwise
+  if [[ "$ADMIN_RESET_MODE" == "always" ]]; then
+    set_env SEED_ON_START "true"
+  else
+    export SEED_ON_START=true
+  fi
   echo "[update] Admin reset requested (${ADMIN_RESET_MODE}). Username=$(grep '^ADMIN_USERNAMES=' .env | cut -d= -f2), Password=${PASS_TO_USE}"
 fi
 
@@ -127,19 +132,47 @@ case "$USE_TUNNEL" in
 set -x
 export COMPOSE_PROJECT_NAME="$PROJECT_NAME"
 
+# Include persistence compose when DB_DATA_DIR is configured
+include_persist=false
+if [[ -n "${DB_DATA_DIR:-}" ]]; then
+  include_persist=true
+elif [[ -f .env ]] && grep -qE '^DB_DATA_DIR=.{1,}$' .env; then
+  include_persist=true
+fi
+
 compose_files=(-f docker-compose.yml -f docker-compose.prod.yml)
+if [[ "$include_persist" == true ]]; then
+  compose_files+=(-f docker-compose.persist.yml)
+fi
 if [[ "$include_tunnel" == true ]]; then
   compose_files+=(-f docker-compose.tunnel.yml)
 fi
 
+echo "[update] Using compose files: ${compose_files[*]}"
+
 # Optionally refresh base images, then rebuild (or not)
- docker compose "${compose_files[@]}" pull || true
+docker compose "${compose_files[@]}" pull || true
 if [[ "$NO_BUILD" == true ]]; then
   docker compose "${compose_files[@]}" up -d
 else
   docker compose "${compose_files[@]}" up -d --build
 fi
 set +x
+
+# Post-update: ensure migrations applied (backend entrypoint also does this)
+echo "[update] Ensuring database migrations are applied..."
+for i in $(seq 1 20); do
+  if docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate deploy' >/dev/null 2>&1; then
+    echo "[update] Prisma migrations applied."
+    applied=true
+    break
+  fi
+  echo "[update] migrate deploy not ready yet, retrying ($i/20) ..."
+  sleep 3
+done
+if [[ "${applied:-false}" != true ]]; then
+  echo "[update] Warning: could not confirm migrations (backend may still be starting). Continuing."
+fi
 
 # Revert to ensure if requested once
 if [[ "$ADMIN_RESET_MODE" == "once" ]]; then

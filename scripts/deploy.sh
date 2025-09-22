@@ -71,7 +71,7 @@ if [[ ! -f "$DIR_ROOT/.env" ]]; then
   # Generate a random SESSION_SECRET
   SECRET=$(openssl rand -hex 32 2>/dev/null || uuidgen | tr -d '-')
   cat > "$DIR_ROOT/.env" <<'EOF'
-DATABASE_URL=postgresql://postgres:postgres@db:5432/jarvis
+DATABASE_URL=postgresql://jarvis:jarvis@db:5432/jarvis
 SESSION_SECRET=
 BACKEND_PORT=8080
 FRONTEND_ORIGIN=http://localhost:5173
@@ -137,26 +137,60 @@ if [[ "$ADMIN_RESET_MODE" != "no" ]]; then
   fi
   set_env ADMIN_DEFAULT_PASSWORD "$PASS_TO_USE"
   set_env ADMIN_SEED_MODE "reset"
-  set_env SEED_DB "true"
+  # Trigger seeding: for 'always' persist SEED_ON_START=true; for 'once' only export for this run
+  if [[ "$ADMIN_RESET_MODE" == "always" ]]; then
+    set_env SEED_ON_START "true"
+  else
+    export SEED_ON_START=true
+  fi
   echo "\n[deploy] Admin reset requested (${ADMIN_RESET_MODE}). Username=$(grep '^ADMIN_USERNAMES=' "$DIR_ROOT/.env" | cut -d= -f2), Password=${PASS_TO_USE}"
 fi
 
 set -x
 export COMPOSE_PROJECT_NAME="$PROJECT_NAME"
+
+# Decide whether to include the persistence override (bind mount) based on DB_DATA_DIR
+include_persist=false
+if [[ -n "${DB_DATA_DIR:-}" ]]; then
+  include_persist=true
+elif [[ -f "$DIR_ROOT/.env" ]] && grep -qE '^DB_DATA_DIR=.{1,}$' "$DIR_ROOT/.env"; then
+  include_persist=true
+fi
+
+# Build compose file list
+compose_files=(-f docker-compose.yml -f docker-compose.prod.yml)
+if [[ "$include_persist" == true ]]; then
+  compose_files+=(-f docker-compose.persist.yml)
+fi
 if [[ -n "$TOKEN" ]]; then
-  if [[ "$NO_BUILD" == true ]]; then
-    docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.tunnel.yml up -d
-  else
-    docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.tunnel.yml up -d --build
-  fi
+  compose_files+=(-f docker-compose.tunnel.yml)
+fi
+
+echo "[deploy] Using compose files: ${compose_files[*]}"
+
+if [[ "$NO_BUILD" == true ]]; then
+  docker compose "${compose_files[@]}" up -d
 else
-  if [[ "$NO_BUILD" == true ]]; then
-    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-  else
-    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-  fi
+  docker compose "${compose_files[@]}" up -d --build
 fi
 set +x
+
+# --- Post-deploy: ensure database is ready and migrations are applied ---
+echo "[deploy] Ensuring database migrations are applied..."
+# Retry running migrate deploy inside backend (backend entrypoint also does this, so this is extra safety)
+for i in $(seq 1 20); do
+  if docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate deploy' >/dev/null 2>&1; then
+    echo "[deploy] Prisma migrations applied."
+    applied=true
+    break
+  fi
+  echo "[deploy] migrate deploy not ready yet, retrying ($i/20) ..."
+  sleep 3
+done
+if [[ "${applied:-false}" != true ]]; then
+  echo "[deploy] Warning: could not confirm migrations (backend may still be starting). Continuing."
+fi
+
 
 # If reset was only for this run, switch back to ensure to avoid future auto-resets
 if [[ "$ADMIN_RESET_MODE" == "once" ]]; then
