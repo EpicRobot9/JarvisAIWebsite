@@ -10,18 +10,7 @@ function ChatSheet({ open, onClose, user, onDebug }) {
   const [input, setInput] = useState('')
   const [messages, setMessages] = useState(() => {
     const saved = storage.get('jarvis_chat_v1', [])
-    const lastActive = Number(storage.get('jarvis_chat_lastActive_v1', 0) || 0)
-    const now = Date.now()
-    if (!Array.isArray(saved)) return []
-    if (!lastActive || now - lastActive > CHAT_INACTIVITY_RESET_MS) {
-      // Too much time since last activity; reset persisted chat
-      try {
-        storage.remove('jarvis_chat_v1')
-        storage.remove('jarvis_chat_lastActive_v1')
-      } catch {}
-      return []
-    }
-    return saved
+    return Array.isArray(saved) ? saved : []
   })
   const [error, setError] = useState('')
   useEffect(()=> { storage.set('jarvis_chat_v1', messages) }, [messages])
@@ -31,29 +20,7 @@ function ChatSheet({ open, onClose, user, onDebug }) {
     try { storage.set('jarvis_chat_lastActive_v1', Date.now()) } catch {}
   }
 
-  // Check inactivity on open/focus and reset if needed
-  useEffect(()=> {
-    const checkAndMaybeReset = () => {
-      const lastActive = Number(storage.get('jarvis_chat_lastActive_v1', 0) || 0)
-      const now = Date.now()
-      if (!lastActive || now - lastActive > CHAT_INACTIVITY_RESET_MS) {
-        try {
-          storage.remove('jarvis_chat_v1')
-          storage.remove('jarvis_chat_lastActive_v1')
-        } catch {}
-        if (messages.length) setMessages([])
-      }
-    }
-    // run when sheet opens
-    if (open) checkAndMaybeReset()
-    const onVis = () => { if (!document.hidden) checkAndMaybeReset() }
-    document.addEventListener('visibilitychange', onVis)
-    window.addEventListener('focus', onVis)
-    return ()=> {
-      document.removeEventListener('visibilitychange', onVis)
-      window.removeEventListener('focus', onVis)
-    }
-  }, [open, messages.length])
+  // Removed inactivity-based auto-clear of chat history
 
   async function send(text) {
     markUserSent()
@@ -314,6 +281,9 @@ export default function Dashboard() {
             </button>
             <button className="jarvis-btn flex items-center gap-2" onClick={()=>setOpen(true)}>
               <MessageSquare size={18}/> UI Chat
+            </button>
+            <button className="jarvis-btn flex items-center gap-2" onClick={()=>nav('/')}>
+              🎤 Jarvis AI Interface
             </button>
             <button className={`rounded-xl px-3 py-2 flex items-center gap-2 backdrop-blur-md border ${rec.isRecording?'bg-red-600 text-white':'bg-white/5 border-cyan-200/20'}`} onClick={()=> rec.isRecording ? rec.stop(onVoiceStop) : rec.start()}>
               <Mic size={18}/> Voice {rec.isRecording ? `(${rec.level}%)` : ''}

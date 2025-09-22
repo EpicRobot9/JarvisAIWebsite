@@ -57,9 +57,6 @@ export function useEventChannel(sessionId: string, userId: string | undefined, o
             // Give AudioContext a chance to resume before attempting playback
             try { await (await import('./audio')).primeAudio() } catch {}
             await opts.onSpeak(ev.text, { forceStream: true })
-          } catch (e) {
-            // Fallback to Web Speech API if TTS playback failed
-            try { const a = await import('./audio'); await a.speakWithWebSpeech(ev.text) } catch {}
           } finally { opts.setSpeaking(false) }
         }
       } else if (ev.type === 'call-end') {

@@ -12,14 +12,21 @@
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
+    "@picovoice/porcupine-web": "^3.0.3",
+    "@picovoice/web-voice-processor": "^4.0.9",
+    "@ricky0123/vad-web": "^0.0.27",
     "clsx": "^2.1.1",
     "framer-motion": "^11.3.23",
+    "hast-util-sanitize": "^5.0.1",
     "lucide-react": "^0.452.0",
+    "mermaid": "^10.9.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "react-router-dom": "^6.26.2",
     "react-syntax-highlighter": "^15.5.0",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.0"
   },
   "devDependencies": {

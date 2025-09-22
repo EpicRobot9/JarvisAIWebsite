@@ -31,7 +31,15 @@ async function runQueue() {
     processingQueue = false
     // When nothing queued and nothing playing, notify idle
     if (playbackQueue.length === 0 && !isAudioActive()) {
-      try { onQueueIdle?.() } catch {}
+      // Defer slightly to allow callers to enqueue fallbacks in the same tick
+      setTimeout(() => {
+        if (playbackQueue.length === 0 && !isAudioActive()) {
+          try {
+            try { console.debug('[Audio] queue idle (runQueue deferred) – firing onQueueIdle') } catch {}
+            onQueueIdle?.()
+          } catch {}
+        }
+      }, 60)
     }
   }
 }
@@ -45,6 +53,9 @@ export function enqueuePlayback(task: QueueTask): Promise<void> {
         resolve()
       } catch (e) {
         try { reject(e as any) } catch {}
+        // Re-throw so runQueue awaits a rejected promise (caught there),
+        // preventing premature idle semantics for failed tasks
+        throw e
       }
     }
     playbackQueue.push(wrapper)
@@ -64,7 +75,19 @@ export function clearPlaybackQueue() {
 }
 export function getPlaybackQueueLength(): number { return playbackQueue.length }
 export function setOnQueueIdleListener(fn: (()=>void) | null) { onQueueIdle = fn }
-export function isAudioActive(): boolean { return !!currentSource || !!currentMediaEl }
+export function isAudioActive(): boolean {
+  // Active if a WebAudio BufferSource is playing
+  if (currentSource) return true
+  // Active if an <audio> element exists and is currently playing
+  if (currentMediaEl) {
+    try {
+      // Consider not active if paused or ended
+      if (currentMediaEl.paused || (currentMediaEl as any).ended) return false
+    } catch {}
+    return true
+  }
+  return false
+}
 
 function getCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 48000 })
@@ -193,7 +216,10 @@ export async function playAudioBuffer(arrayBuffer: ArrayBuffer): Promise<void> {
       if (rafId) { cancelAnimationFrame(rafId); rafId = null }
       // If queue has more, runner will pick next; otherwise notify idle
       if (!processingQueue && getPlaybackQueueLength() === 0) {
-        try { onQueueIdle?.() } catch {}
+        try {
+          try { console.debug('[Audio] queue idle (buffer onended) – firing onQueueIdle') } catch {}
+          onQueueIdle?.()
+        } catch {}
       }
       resolve()
     }
@@ -229,6 +255,8 @@ export async function stopAudio(): Promise<void> {
     try { currentMediaNode.disconnect() } catch {}
     currentMediaNode = null
   }
+  // Also cancel any Web Speech utterances to prevent overlap
+  try { (window as any).speechSynthesis?.cancel?.() } catch {}
   currentMessageId = null
 }
 
@@ -262,16 +290,28 @@ export async function playStreamUrl(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
     let started = false
     audio.addEventListener('ended', () => {
+      try { console.debug('[Audio] media ended') } catch {}
       if (rafId) { cancelAnimationFrame(rafId); rafId = null }
-  currentMessageId = null
+      currentMessageId = null
+      // Clear active media refs so isAudioActive reflects reality
+      try { currentMediaEl = null } catch {}
+      try { currentMediaNode?.disconnect() } catch {}
+      currentMediaNode = null
       if (!processingQueue && getPlaybackQueueLength() === 0) {
         try { onQueueIdle?.() } catch {}
       }
       resolve()
     })
     audio.addEventListener('error', () => {
+      try { console.debug('[Audio] media error') } catch {}
       if (rafId) { cancelAnimationFrame(rafId); rafId = null }
-      reject(new Error('Audio playback error'))
+      const me = (audio as any).error as MediaError | undefined
+      const code = me?.code
+      const codeMsg = code === 1 ? 'ABORTED' : code === 2 ? 'NETWORK' : code === 3 ? 'DECODE' : code === 4 ? 'SRC_NOT_SUPPORTED' : 'UNKNOWN'
+      const online = typeof navigator !== 'undefined' ? navigator.onLine : undefined
+      const src = audio.currentSrc || url
+      // Don't fire idle here; let runQueue's deferred idle handle it after any fallback enqueue
+      reject(new Error(`Audio playback error (code: ${code ?? 'n/a'} ${codeMsg}, online=${online}) for ${src}`))
     })
     audio.addEventListener('canplay', async () => {
       if (started) return
@@ -293,13 +333,54 @@ export async function playStreamUrl(url: string): Promise<void> {
   })
 }
 
+/** Get available Web Speech API voices */
+export function getWebSpeechVoices(): SpeechSynthesisVoice[] {
+  try {
+    const synth: SpeechSynthesis | undefined = (window as any).speechSynthesis
+    if (!synth) return []
+    return synth.getVoices()
+  } catch {
+    return []
+  }
+}
+
 /** Fallback: speak via Web Speech API (if available). */
 export function speakWithWebSpeech(text: string): Promise<void> {
   return new Promise((resolve, reject) => {
     try {
       const synth: SpeechSynthesis | undefined = (window as any).speechSynthesis
       if (!synth) return reject(new Error('Web Speech not available'))
+      
       const utt = new SpeechSynthesisUtterance(text)
+      
+      // Try to select a better voice based on user preference
+      const voices = synth.getVoices()
+      const webSpeechPreference = localStorage.getItem('user_web_speech_voice') || 'auto'
+      
+      if (webSpeechPreference !== 'auto' && voices.length > 0) {
+        // Try to find the preferred voice
+        const preferredVoice = voices.find(voice => voice.name === webSpeechPreference)
+        if (preferredVoice) {
+          utt.voice = preferredVoice
+        }
+      } else if (voices.length > 0) {
+        // Auto-select: prefer English voices, then any available voice
+        const englishVoices = voices.filter(voice => voice.lang.startsWith('en'))
+        if (englishVoices.length > 0) {
+          utt.voice = englishVoices[0]
+        }
+      }
+      
+      // Configure speech parameters
+      let rate = 0.85 // Default slightly slower than normal for clarity
+      try {
+        const saved = Number(localStorage.getItem('ux_web_speech_rate') || '0.85')
+        if (Number.isFinite(saved)) rate = Math.max(0.5, Math.min(1.5, saved))
+      } catch {}
+      utt.rate = rate
+      utt.pitch = 1.0
+      utt.volume = 0.8
+      
       utt.onend = () => resolve()
       utt.onerror = (e) => reject(e.error || new Error('Speech synthesis failed'))
       try { synth.speak(utt) } catch (e) { reject(e as any) }
@@ -334,4 +415,95 @@ export async function playCachedTts(messageId: string): Promise<void> {
   if (!buf) return
   currentMessageId = messageId
   await playAudioBuffer(buf)
+}
+
+// --- Simple chime for wake word feedback ---
+export async function playChime(options?: { frequency?: number; durationMs?: number; volume?: number; type?: OscillatorType }) {
+  const ctx = getCtx()
+  const now = ctx.currentTime
+  const osc = ctx.createOscillator()
+  const gain = ctx.createGain()
+  const freq = options?.frequency ?? 880
+  const dur = (options?.durationMs ?? 160) / 1000
+  const vol = options?.volume ?? 0.2
+  const type = options?.type ?? 'sine'
+  osc.type = type
+  osc.frequency.value = freq
+  gain.gain.setValueAtTime(0, now)
+  gain.gain.linearRampToValueAtTime(vol, now + 0.01)
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, vol * 0.001), now + dur)
+  osc.connect(gain)
+  gain.connect(ctx.destination)
+  return new Promise<void>(async (resolve) => {
+    try { await ctx.resume() } catch {}
+    osc.start(now)
+    osc.stop(now + dur + 0.02)
+    osc.onended = () => {
+      try { osc.disconnect() } catch {}
+      try { gain.disconnect() } catch {}
+      resolve()
+    }
+  })
+}
+
+// Preset chimes built with WebAudio
+export type ChimePreset = 'ding' | 'ding-dong' | 'soft-pop'
+export async function playPresetChime(preset: ChimePreset, volume = 0.2) {
+  const vol = Math.max(0, Math.min(1, volume))
+  switch (preset) {
+    case 'ding':
+      return playChime({ frequency: 880, durationMs: 140, volume: vol, type: 'sine' })
+    case 'ding-dong': {
+      // Two quick tones
+      await playChime({ frequency: 740, durationMs: 120, volume: vol, type: 'sine' })
+      await new Promise(r => setTimeout(r, 60))
+      return playChime({ frequency: 988, durationMs: 160, volume: vol, type: 'sine' })
+    }
+    case 'soft-pop':
+      return playChime({ frequency: 520, durationMs: 90, volume: vol, type: 'triangle' })
+  }
+}
+
+// Play an ArrayBuffer without interrupting existing audio
+async function playArrayBufferLight(arrayBuffer: ArrayBuffer): Promise<void> {
+  const ctx = getCtx()
+  const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+  const src = ctx.createBufferSource()
+  src.buffer = audioBuffer
+  src.connect(ctx.destination)
+  await ctx.resume()
+  return new Promise((resolve) => {
+    src.onended = () => {
+      try { src.disconnect() } catch {}
+      resolve()
+    }
+    src.start(0)
+  })
+}
+
+// Play a data URL (e.g., uploaded chime) without interrupting existing audio, with volume control
+export async function playDataUrlWithVolume(dataUrl: string, volume = 0.2): Promise<void> {
+  try {
+    const ctx = getCtx()
+    const res = await fetch(dataUrl)
+    const buf = await res.arrayBuffer()
+    const audioBuffer = await ctx.decodeAudioData(buf.slice(0))
+    const src = ctx.createBufferSource()
+    const gain = ctx.createGain()
+    src.buffer = audioBuffer
+    gain.gain.value = Math.max(0, Math.min(1, volume))
+    src.connect(gain)
+    gain.connect(ctx.destination)
+    await ctx.resume()
+    await new Promise<void>((resolve) => {
+      src.onended = () => {
+        try { src.disconnect() } catch {}
+        try { gain.disconnect() } catch {}
+        resolve()
+      }
+      src.start(0)
+    })
+  } catch (e) {
+    console.warn('Failed to play data URL with volume:', e)
+  }
 }

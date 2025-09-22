@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wake Word Detection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .listening {
+            background: rgba(34, 197, 94, 0.3);
+            border: 2px solid #22c55e;
+        }
+        .idle {
+            background: rgba(107, 114, 128, 0.3);
+            border: 2px solid #6b7280;
+        }
+        .error {
+            background: rgba(239, 68, 68, 0.3);
+            border: 2px solid #ef4444;
+        }
+        .detected {
+            background: rgba(251, 191, 36, 0.3);
+            border: 2px solid #fbbf24;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #2563eb;
+        }
+        button:disabled {
+            background: #6b7280;
+            cursor: not-allowed;
+        }
+        .log {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .wake-words {
+            background: rgba(139, 92, 246, 0.2);
+            border: 1px solid #8b5cf6;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Wake Word Detection Test</h1>
+        <p>Test the wake word detection functionality using your browser's Web Speech API.</p>
+        
+        <div class="wake-words">
+            <h3>Try saying one of these wake words:</h3>
+            <ul>
+                <li><strong>"jarvis"</strong></li>
+                <li><strong>"hey jarvis"</strong></li>
+                <li><strong>"okay jarvis"</strong></li>
+            </ul>
+        </div>
+
+        <div id="status" class="status idle">
+            Status: Not started
+        </div>
+
+        <div>
+            <button id="startBtn">Start Wake Word Detection</button>
+            <button id="stopBtn" disabled>Stop Detection</button>
+            <button id="clearBtn">Clear Log</button>
+        </div>
+
+        <div class="log" id="log">
+            <div>🔧 Wake Word Detection Test Console</div>
+            <div>Click "Start Wake Word Detection" to begin...</div>
+        </div>
+    </div>
+
+    <script>
+        class WakeWordTester {
+            constructor() {
+                this.recognition = null;
+                this.isListening = false;
+                this.wakeWords = ['jarvis', 'hey jarvis', 'okay jarvis'];
+                
+                this.statusEl = document.getElementById('status');
+                this.logEl = document.getElementById('log');
+                this.startBtn = document.getElementById('startBtn');
+                this.stopBtn = document.getElementById('stopBtn');
+                this.clearBtn = document.getElementById('clearBtn');
+                
+                this.setupEventListeners();
+                this.checkBrowserSupport();
+            }
+            
+            checkBrowserSupport() {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SpeechRecognition) {
+                    this.updateStatus('error', 'Speech Recognition not supported in this browser');
+                    this.log('❌ Browser not supported. Try Chrome, Edge, or Safari.', 'error');
+                    this.startBtn.disabled = true;
+                    return false;
+                }
+                
+                this.log('✅ Browser supports Web Speech API', 'success');
+                return true;
+            }
+            
+            setupEventListeners() {
+                this.startBtn.addEventListener('click', () => this.start());
+                this.stopBtn.addEventListener('click', () => this.stop());
+                this.clearBtn.addEventListener('click', () => this.clearLog());
+            }
+            
+            async start() {
+                if (this.isListening) return;
+                
+                try {
+                    // Request microphone permission
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    stream.getTracks().forEach(track => track.stop()); // We just needed permission
+                    
+                    this.initializeRecognition();
+                    this.recognition.start();
+                    
+                } catch (error) {
+                    this.log(`❌ Microphone permission denied: ${error.message}`, 'error');
+                    this.updateStatus('error', 'Microphone permission required');
+                }
+            }
+            
+            stop() {
+                if (this.recognition && this.isListening) {
+                    this.recognition.stop();
+                }
+            }
+            
+            initializeRecognition() {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                this.recognition = new SpeechRecognition();
+                
+                this.recognition.continuous = true;
+                this.recognition.interimResults = true;
+                this.recognition.lang = 'en-US';
+                
+                this.recognition.onstart = () => {
+                    this.isListening = true;
+                    this.updateStatus('listening', '👂 Listening for wake words...');
+                    this.log('🎤 Started listening for wake words', 'info');
+                    this.startBtn.disabled = true;
+                    this.stopBtn.disabled = false;
+                };
+                
+                this.recognition.onresult = (event) => {
+                    const transcript = Array.from(event.results)
+                        .map(result => result[0].transcript.toLowerCase())
+                        .join('');
+                    
+                    this.log(`🎵 Heard: "${transcript}"`, 'info');
+                    
+                    // Check for wake words
+                    const foundWakeWord = this.wakeWords.find(word => 
+                        transcript.includes(word.toLowerCase())
+                    );
+                    
+                    if (foundWakeWord) {
+                        this.updateStatus('detected', `🚀 WAKE WORD DETECTED: "${foundWakeWord}"`);
+                        this.log(`✅ WAKE WORD DETECTED: "${foundWakeWord}" in transcript: "${transcript}"`, 'success');
+                        
+                        // Simulate what would happen in the real app
+                        setTimeout(() => {
+                            this.log('📝 → Would start recording user command now', 'action');
+                            this.log('🤖 → Would send to N8N webhook after recording', 'action');
+                            this.log('🔊 → Would play TTS response', 'action');
+                            if (this.isListening) {
+                                this.updateStatus('listening', '👂 Listening for wake words...');
+                            }
+                        }, 2000);
+                    }
+                };
+                
+                this.recognition.onerror = (event) => {
+                    this.log(`❌ Speech recognition error: ${event.error}`, 'error');
+                    if (event.error === 'not-allowed') {
+                        this.updateStatus('error', 'Microphone permission denied');
+                    } else {
+                        this.updateStatus('error', `Error: ${event.error}`);
+                    }
+                };
+                
+                this.recognition.onend = () => {
+                    this.isListening = false;
+                    this.startBtn.disabled = false;
+                    this.stopBtn.disabled = true;
+                    
+                    if (this.statusEl.className.includes('listening')) {
+                        this.updateStatus('idle', 'Stopped listening');
+                        this.log('🛑 Stopped listening', 'info');
+                    }
+                    
+                    // Auto-restart if we were listening (simulates continuous detection)
+                    if (this.recognition && this.statusEl.className.includes('listening')) {
+                        setTimeout(() => {
+                            if (!this.isListening) {
+                                this.log('🔄 Auto-restarting recognition...', 'info');
+                                try {
+                                    this.recognition.start();
+                                } catch (error) {
+                                    this.log(`⚠️ Failed to restart: ${error.message}`, 'warning');
+                                }
+                            }
+                        }, 100);
+                    }
+                };
+            }
+            
+            updateStatus(type, message) {
+                this.statusEl.className = `status ${type}`;
+                this.statusEl.textContent = `Status: ${message}`;
+            }
+            
+            log(message, type = 'info') {
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement('div');
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                
+                if (type === 'error') logEntry.style.color = '#ef4444';
+                else if (type === 'success') logEntry.style.color = '#22c55e';
+                else if (type === 'warning') logEntry.style.color = '#f59e0b';
+                else if (type === 'action') logEntry.style.color = '#8b5cf6';
+                
+                this.logEl.appendChild(logEntry);
+                this.logEl.scrollTop = this.logEl.scrollHeight;
+            }
+            
+            clearLog() {
+                this.logEl.innerHTML = '<div>🔧 Wake Word Detection Test Console</div>';
+            }
+        }
+        
+        // Initialize the tester when the page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new WakeWordTester();
+        });
+    </script>
+</body>
+</html>

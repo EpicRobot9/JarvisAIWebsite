@@ -10,6 +10,11 @@ import AwaitingApproval from './pages/AwaitingApproval'
 import InterstellarManager from './pages/InterstellarManager'
 import InterstellarAdmin from './pages/InterstellarAdmin'
 import Page from '../app/(ui)/page'
+import JarvisNotes from './pages/JarvisNotes'
+import NotesSettings from './pages/NotesSettings'
+import StudyBuilder from './pages/StudyBuilder'
+import StudySetView from './pages/StudySetView'
+import FlashcardsGame from './pages/FlashcardsGame'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -20,6 +25,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/admin" element={<Admin />} />
           <Route path="/admin/interstellar" element={<InterstellarAdmin />} />
           <Route path="/interstellar" element={<InterstellarManager />} />
+          <Route path="/notes" element={<JarvisNotes />} />
+          <Route path="/notes/settings" element={<NotesSettings />} />
+          <Route path="/study" element={<StudyBuilder />} />
+          <Route path="/study/sets/:id" element={<StudySetView />} />
+          <Route path="/study/sets/:id/flashcards" element={<FlashcardsGame />} />
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
           <Route path="/awaiting" element={<AwaitingApproval />} />

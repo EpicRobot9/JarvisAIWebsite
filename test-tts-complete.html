@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTS Complete Fallback Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .test-section {
+            background: #2d2d2d;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        button {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0052a3; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            background: #333;
+        }
+        .success { background: #0d5016; }
+        .error { background: #501616; }
+        .warning { background: #4d3319; }
+    </style>
+</head>
+<body>
+    <h1>🎤 Jarvis TTS Complete Fallback Test</h1>
+    
+    <div class="test-section">
+        <h2>1. ElevenLabs TTS (Primary)</h2>
+        <p>Tests the primary TTS service through the backend API.</p>
+        <button onclick="testElevenLabs()">Test ElevenLabs TTS</button>
+        <div id="elevenlabs-status" class="status">Ready to test</div>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. Server Fallback (eSpeak-NG)</h2>
+        <p>Tests server-side eSpeak-NG fallback through /api/tts/fallback endpoint.</p>
+        <button onclick="testEspeakFallback()">Test eSpeak Fallback</button>
+        <div id="espeak-status" class="status">Ready to test</div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. Browser Fallback (Web Speech API)</h2>
+        <p>Tests client-side Web Speech API fallback.</p>
+        <button onclick="testWebSpeech()">Test Web Speech API</button>
+        <div id="webspeech-status" class="status">Ready to test</div>
+    </div>
+    
+    <div class="test-section">
+        <h2>4. Voice Presets Test</h2>
+        <p>Test different ElevenLabs voice presets (requires API key).</p>
+        <select id="voice-select">
+            <option value="21m00Tcm4TlvDq8ikWAM">Rachel (Female)</option>
+            <option value="AZnzlk1XvdvUeBnXmlld">Domi (Female)</option>
+            <option value="ErXwobaYiN019PkySvjV">Antoni (Male)</option>
+            <option value="pNInz6obpgDQGcFmaJgB">Adam (Male)</option>
+        </select>
+        <button onclick="testVoicePreset()">Test Selected Voice</button>
+        <div id="voice-status" class="status">Ready to test</div>
+    </div>
+
+    <div class="test-section">
+        <h2>5. Complete Fallback Chain</h2>
+        <p>Tests the complete fallback chain: ElevenLabs → eSpeak → Web Speech</p>
+        <button onclick="testCompleteFallback()">Test Complete Fallback</button>
+        <div id="complete-status" class="status">Ready to test</div>
+    </div>
+
+    <script>
+        const testText = "Hello! This is a test of the Jarvis AI voice system. The voice fallback chain ensures you always hear a response.";
+
+        function updateStatus(elementId, message, type = 'info') {
+            const element = document.getElementById(elementId);
+            element.textContent = message;
+            element.className = `status ${type}`;
+        }
+
+        async function testElevenLabs() {
+            updateStatus('elevenlabs-status', 'Testing ElevenLabs TTS...', 'warning');
+            try {
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'credentials': 'include'
+                    },
+                    body: JSON.stringify({ text: testText })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const audioData = await response.arrayBuffer();
+                const audio = new Audio();
+                const blob = new Blob([audioData], { type: 'audio/mpeg' });
+                audio.src = URL.createObjectURL(blob);
+                
+                audio.onloadeddata = () => {
+                    updateStatus('elevenlabs-status', 'ElevenLabs TTS working! Playing audio...', 'success');
+                    audio.play();
+                };
+                
+                audio.onerror = () => {
+                    updateStatus('elevenlabs-status', 'ElevenLabs TTS returned data but audio playback failed', 'error');
+                };
+                
+            } catch (error) {
+                updateStatus('elevenlabs-status', `ElevenLabs TTS failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testEspeakFallback() {
+            updateStatus('espeak-status', 'Testing eSpeak-NG fallback...', 'warning');
+            try {
+                const response = await fetch('/api/tts/fallback', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'credentials': 'include'
+                    },
+                    body: JSON.stringify({ text: testText })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const audioData = await response.arrayBuffer();
+                const audio = new Audio();
+                const blob = new Blob([audioData], { type: 'audio/mpeg' });
+                audio.src = URL.createObjectURL(blob);
+                
+                audio.onloadeddata = () => {
+                    updateStatus('espeak-status', 'eSpeak-NG fallback working! Playing audio...', 'success');
+                    audio.play();
+                };
+                
+                audio.onerror = () => {
+                    updateStatus('espeak-status', 'eSpeak-NG returned data but audio playback failed', 'error');
+                };
+                
+            } catch (error) {
+                updateStatus('espeak-status', `eSpeak-NG fallback failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testWebSpeech() {
+            updateStatus('webspeech-status', 'Testing Web Speech API...', 'warning');
+            try {
+                if (!window.speechSynthesis) {
+                    throw new Error('Web Speech API not supported in this browser');
+                }
+                
+                const utterance = new SpeechSynthesisUtterance(testText);
+                utterance.rate = 0.9;
+                utterance.pitch = 1.0;
+                utterance.volume = 0.8;
+                
+                utterance.onstart = () => {
+                    updateStatus('webspeech-status', 'Web Speech API working! Playing audio...', 'success');
+                };
+                
+                utterance.onerror = (event) => {
+                    updateStatus('webspeech-status', `Web Speech API failed: ${event.error}`, 'error');
+                };
+                
+                utterance.onend = () => {
+                    updateStatus('webspeech-status', 'Web Speech API completed successfully', 'success');
+                };
+                
+                speechSynthesis.speak(utterance);
+                
+            } catch (error) {
+                updateStatus('webspeech-status', `Web Speech API failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testVoicePreset() {
+            const voiceId = document.getElementById('voice-select').value;
+            const voiceName = document.getElementById('voice-select').selectedOptions[0].text;
+            updateStatus('voice-status', `Testing ${voiceName}...`, 'warning');
+            
+            try {
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-elevenlabs-voice-id': voiceId,
+                        'credentials': 'include'
+                    },
+                    body: JSON.stringify({ text: `Hello, this is ${voiceName.split(' ')[0]} speaking. ${testText}` })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const audioData = await response.arrayBuffer();
+                const audio = new Audio();
+                const blob = new Blob([audioData], { type: 'audio/mpeg' });
+                audio.src = URL.createObjectURL(blob);
+                
+                audio.onloadeddata = () => {
+                    updateStatus('voice-status', `${voiceName} preset working! Playing audio...`, 'success');
+                    audio.play();
+                };
+                
+                audio.onerror = () => {
+                    updateStatus('voice-status', `${voiceName} returned data but audio playback failed`, 'error');
+                };
+                
+            } catch (error) {
+                updateStatus('voice-status', `Voice preset failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testCompleteFallback() {
+            updateStatus('complete-status', 'Testing complete fallback chain...', 'warning');
+            
+            let elevenlabsWorked = false;
+            let espeakWorked = false;
+            let webSpeechWorked = false;
+            
+            // Try ElevenLabs first
+            try {
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'credentials': 'include'
+                    },
+                    body: JSON.stringify({ text: testText })
+                });
+                
+                if (response.ok) {
+                    const audioData = await response.arrayBuffer();
+                    const audio = new Audio();
+                    const blob = new Blob([audioData], { type: 'audio/mpeg' });
+                    audio.src = URL.createObjectURL(blob);
+                    
+                    await new Promise((resolve, reject) => {
+                        audio.onloadeddata = () => {
+                            elevenlabsWorked = true;
+                            updateStatus('complete-status', 'ElevenLabs working - no fallback needed!', 'success');
+                            audio.play();
+                            resolve();
+                        };
+                        audio.onerror = reject;
+                        setTimeout(reject, 5000);
+                    });
+                    return;
+                }
+            } catch (error) {
+                console.log('ElevenLabs failed, trying eSpeak...', error);
+            }
+            
+            // Try eSpeak fallback
+            try {
+                const response = await fetch('/api/tts/fallback', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'credentials': 'include'
+                    },
+                    body: JSON.stringify({ text: testText })
+                });
+                
+                if (response.ok) {
+                    const audioData = await response.arrayBuffer();
+                    const audio = new Audio();
+                    const blob = new Blob([audioData], { type: 'audio/mpeg' });
+                    audio.src = URL.createObjectURL(blob);
+                    
+                    await new Promise((resolve, reject) => {
+                        audio.onloadeddata = () => {
+                            espeakWorked = true;
+                            updateStatus('complete-status', 'ElevenLabs failed, eSpeak fallback working!', 'success');
+                            audio.play();
+                            resolve();
+                        };
+                        audio.onerror = reject;
+                        setTimeout(reject, 5000);
+                    });
+                    return;
+                }
+            } catch (error) {
+                console.log('eSpeak failed, trying Web Speech...', error);
+            }
+            
+            // Try Web Speech fallback
+            try {
+                if (window.speechSynthesis) {
+                    const utterance = new SpeechSynthesisUtterance(testText);
+                    utterance.rate = 0.9;
+                    utterance.pitch = 1.0;
+                    utterance.volume = 0.8;
+                    
+                    await new Promise((resolve, reject) => {
+                        utterance.onstart = () => {
+                            webSpeechWorked = true;
+                            updateStatus('complete-status', 'ElevenLabs and eSpeak failed, Web Speech API fallback working!', 'success');
+                            resolve();
+                        };
+                        utterance.onerror = reject;
+                        setTimeout(reject, 5000);
+                    });
+                    
+                    speechSynthesis.speak(utterance);
+                    return;
+                }
+            } catch (error) {
+                console.log('Web Speech failed too...', error);
+            }
+            
+            updateStatus('complete-status', 'All TTS methods failed - no audio available', 'error');
+        }
+
+        // Display browser capabilities
+        window.onload = () => {
+            const capabilities = [];
+            if (window.speechSynthesis) {
+                const voices = speechSynthesis.getVoices();
+                capabilities.push(`Web Speech API: ${voices.length} voices available`);
+            } else {
+                capabilities.push('Web Speech API: Not supported');
+            }
+            
+            console.log('TTS Capabilities:', capabilities);
+        };
+    </script>
+</body>
+</html>

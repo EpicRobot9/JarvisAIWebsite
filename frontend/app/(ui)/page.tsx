@@ -6,11 +6,13 @@ import ErrorToast from '../../src/components/ErrorToast'
 import ErrorCard from '../../src/components/ErrorCard'
 import { AppError, sendToRouter, sendToWebhook, synthesizeTTS, transcribeAudio, getTtsStreamUrl } from '../../src/lib/api'
 import { stopAudio, cacheTts, hasCachedTts, playCachedTts, isPlayingMessage, playAudioBufferForMessage, enqueueStreamUrl, enqueueAudioBuffer, setOnQueueIdleListener, installAutoplayUnlocker, primeAudio, isAudioReady } from '../../src/lib/audio'
+import { shouldSpeak, suppressSpeakingFor } from '../../src/lib/speechGuard'
 import { useEventChannel } from '../../src/lib/events'
 import { useSession } from '../../src/lib/session'
 import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '../../src/lib/config'
 import { motion, AnimatePresence } from 'framer-motion'
 import CallMode from '../../src/components/CallMode'
+import AlwaysListeningMode from '../../src/components/AlwaysListeningMode'
 import Markdown from '../../src/components/ui/Markdown'
 import { Play as PlayIcon, Square as StopIcon, Mic as MicIcon, MicOff as MicOffIcon } from 'lucide-react'
 import { EFFECTS } from '../../src/components/effects'
@@ -135,10 +137,14 @@ export default function Page() {
     },
     setSpeaking,
   onSpeak: async (text: string, o?: { forceStream?: boolean }) => {
-      // In call mode, always speak (ignore muted race at call start). In chat mode, honor mute.
-      if (session.mode !== 'call' && !o?.forceStream && session.muted) return
-      // During calls, queue via streaming TTS to keep order and avoid interruptions
-      if (session.mode === 'call' || o?.forceStream) {
+    // Guard against accidental duplicates (e.g., both push and push-voice or rapid retries)
+    if (!shouldSpeak(text)) return
+      // During calls, AlwaysListening handles TTS; skip event-driven speaking to avoid duplicates
+      if (session.mode === 'call') return
+      // In chat mode, honor mute
+      if (!o?.forceStream && session.muted) return
+      // For push-voice in chat (forceStream), use streaming queue
+      if (o?.forceStream) {
         session.setStatus('speaking')
         setSpeaking(true)
         setOnQueueIdleListener(() => { setSpeaking(false); session.setStatus('idle') })
@@ -166,8 +172,13 @@ export default function Page() {
         const mid = lastAssistantIdRef.current || crypto.randomUUID()
         if (!hasCachedTts(mid)) {
           const buf = await synthesizeTTS(text)
-          cacheTts(mid, buf)
-          await playAudioBufferForMessage(mid, buf)
+          if (buf && buf.byteLength > 0) {
+            cacheTts(mid, buf)
+            await playAudioBufferForMessage(mid, buf)
+          } else {
+            const { speakWithWebSpeech } = await import('../../src/lib/audio')
+            await speakWithWebSpeech(text)
+          }
         } else {
           await playCachedTts(mid)
         }
@@ -215,12 +226,24 @@ export default function Page() {
         lastReplyRef.current = immediateText
         // Speak with interrupt + cache if not muted
         if (!session.muted) {
+          // Prevent immediate echo from any in-flight push events
+          suppressSpeakingFor(800)
+          if (!shouldSpeak(immediateText)) {
+            session.setStatus('idle')
+            setRetry(null)
+            return
+          }
           session.setStatus('speaking')
           setSpeaking(true)
           await stopAudio()
           const buf = await synthesizeTTS(immediateText)
-          cacheTts(id, buf)
-          await playAudioBufferForMessage(id, buf)
+          if (buf && buf.byteLength > 0) {
+            cacheTts(id, buf)
+            await playAudioBufferForMessage(id, buf)
+          } else {
+            const { speakWithWebSpeech } = await import('../../src/lib/audio')
+            await speakWithWebSpeech(immediateText)
+          }
           setSpeaking(false)
           session.setStatus('idle')
         } else {
@@ -259,12 +282,24 @@ export default function Page() {
           lastAssistantIdRef.current = id
           lastReplyRef.current = resolved
           if (!session.muted) {
+            // Prevent immediate echo from any in-flight push events
+            suppressSpeakingFor(800)
+            if (!shouldSpeak(resolved)) {
+              session.setStatus('idle')
+              setRetry(null)
+              return
+            }
             session.setStatus('speaking')
             setSpeaking(true)
             await stopAudio()
             const buf = await synthesizeTTS(resolved)
-            cacheTts(id, buf)
-            await playAudioBufferForMessage(id, buf)
+            if (buf && buf.byteLength > 0) {
+              cacheTts(id, buf)
+              await playAudioBufferForMessage(id, buf)
+            } else {
+              const { speakWithWebSpeech } = await import('../../src/lib/audio')
+              await speakWithWebSpeech(resolved)
+            }
             setSpeaking(false)
             session.setStatus('idle')
           } else {
@@ -313,15 +348,23 @@ export default function Page() {
 
   async function speak(text: string) {
     if (!text) return
+    if (!shouldSpeak(text)) return
     try {
+  // Prevent echoes from concurrent event pushes
+  suppressSpeakingFor(800)
   if (session.muted) return
   session.setStatus('speaking')
   setSpeaking(true)
   await stopAudio()
   const id = crypto.randomUUID()
   const buf = await synthesizeTTS(text)
-  cacheTts(id, buf)
-  await playAudioBufferForMessage(id, buf)
+  if (buf && buf.byteLength > 0) {
+    cacheTts(id, buf)
+    await playAudioBufferForMessage(id, buf)
+  } else {
+    const { speakWithWebSpeech } = await import('../../src/lib/audio')
+    await speakWithWebSpeech(text)
+  }
     } catch (e) {
       const err = AppError.from(e)
       session.setError(err)
@@ -410,6 +453,16 @@ export default function Page() {
             }}
             disabled={!canUse}
           >Start Call</button>
+          <Link
+            to="/notes"
+            className="w-full inline-block jarvis-btn text-center"
+            title="Open Jarvis Notes"
+          >Notes</Link>
+          <Link
+            to="/study"
+            className="w-full inline-block jarvis-btn text-center"
+            title="Open Study Builder"
+          >Study Builder</Link>
           <div className="flex items-center gap-2 text-xs">
             <span>Webhook:</span>
             <button className={`px-2 py-1 rounded border ${!useTestWebhook?'bg-blue-600 text-white':'border-cyan-200/20'}`} onClick={()=>setUseTestWebhook(false)}>Prod</button>
@@ -452,8 +505,13 @@ export default function Page() {
                             setTtsLoading(s => new Set([...s, m.id]))
                             try {
                               const buf = await synthesizeTTS(m.text)
-                              cacheTts(m.id, buf)
-                              await playAudioBufferForMessage(m.id, buf)
+                              if (buf && buf.byteLength > 0) {
+                                cacheTts(m.id, buf)
+                                await playAudioBufferForMessage(m.id, buf)
+                              } else {
+                                const { speakWithWebSpeech } = await import('../../src/lib/audio')
+                                await speakWithWebSpeech(m.text)
+                              }
                             } catch (e) {
                               const err = AppError.from(e)
                               session.setError(err)
@@ -534,7 +592,7 @@ export default function Page() {
           <div>
             <button className="px-3 py-2 rounded-xl border border-cyan-200/20" onClick={signOut}>Sign out</button>
                 <div className="mt-2 flex flex-col gap-2">
-                  <Link to="/interstellar" className="px-3 py-2 inline-block rounded-xl border border-cyan-200/20">Interstellar</Link>
+                  <Link to="/interstellar" className="px-3 py-2 inline-block rounded-xl border border-cyan-200/20">Interstellar Manager</Link>
                   {me.role === 'admin' ? (
                     <Link to="/admin" className="px-3 py-2 inline-block rounded-xl border border-cyan-200/20">Admin Panel</Link>
                   ) : null}
@@ -561,8 +619,8 @@ export default function Page() {
         {/* Call Mode overlay */}
         <AnimatePresence>
           {session.mode === 'call' && (
-            <CallMode
-              key="call-mode"
+            <AlwaysListeningMode
+              key="always-listening-mode"
               userId={me?.id}
               sessionId={session.sessionId}
               useTestWebhook={useTestWebhook}

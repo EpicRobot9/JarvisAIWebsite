@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TTS Fallback Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        button { padding: 10px 20px; margin: 5px; font-size: 16px; }
+        .status { margin: 10px 0; padding: 10px; background: #f0f0f0; border-radius: 5px; }
+        .error { background: #ffe6e6; color: #d00; }
+        .success { background: #e6f7e6; color: #080; }
+        .warning { background: #fff3cd; color: #856404; }
+    </style>
+</head>
+<body>
+    <h1>TTS Fallback System Test</h1>
+    <p>This page demonstrates the cascading TTS fallback system:</p>
+    <ol>
+        <li><strong>Primary:</strong> Eleven Labs TTS (requires API key)</li>
+        <li><strong>Fallback 1:</strong> eSpeak-NG server-side TTS (always available)</li>
+        <li><strong>Fallback 2:</strong> Web Speech API (browser-based)</li>
+    </ol>
+    
+    <div>
+        <button onclick="testWebSpeech()">Test Web Speech API</button>
+        <button onclick="testEspeakFallback()">Test eSpeak Fallback</button>
+        <button onclick="testWithoutKeys()">Test Without Eleven Labs Key</button>
+    </div>
+    
+    <div id="status" class="status">Ready to test...</div>
+
+    <script>
+        function updateStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        async function testWebSpeech() {
+            updateStatus('Testing Web Speech API...', 'info');
+            try {
+                const synth = window.speechSynthesis;
+                if (!synth) {
+                    throw new Error('Web Speech API not available');
+                }
+                
+                const utterance = new SpeechSynthesisUtterance('Hello! This is the Web Speech API speaking. This is a lightweight, browser-based text-to-speech system that works offline.');
+                
+                utterance.onend = () => {
+                    updateStatus('✅ Web Speech API test completed successfully!', 'success');
+                };
+                
+                utterance.onerror = (e) => {
+                    updateStatus(`❌ Web Speech API error: ${e.error}`, 'error');
+                };
+                
+                synth.speak(utterance);
+                updateStatus('🔊 Web Speech API is speaking...', 'info');
+                
+            } catch (error) {
+                updateStatus(`❌ Web Speech API failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testEspeakFallback() {
+            updateStatus('Testing eSpeak-NG server fallback...', 'info');
+            try {
+                const response = await fetch('/api/tts/fallback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ 
+                        text: 'Hello! This is eSpeak-NG speaking from the server. This is a lightweight, open-source text-to-speech engine running on the backend.' 
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+                }
+                
+                const audioData = await response.arrayBuffer();
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioContext.decodeAudioData(audioData);
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+                source.start();
+                
+                updateStatus('✅ eSpeak-NG server fallback test completed successfully!', 'success');
+                
+            } catch (error) {
+                updateStatus(`❌ eSpeak fallback failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function testWithoutKeys() {
+            updateStatus('Testing fallback chain without Eleven Labs...', 'info');
+            
+            // Clear any stored keys to simulate no Eleven Labs access
+            localStorage.removeItem('user_elevenlabs_api_key');
+            
+            try {
+                // This should fail on Eleven Labs and cascade to fallbacks
+                const response = await fetch('/api/tts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ 
+                        text: 'This message should be spoken by the fallback system since no Eleven Labs key is configured.' 
+                    })
+                });
+                
+                if (response.ok) {
+                    updateStatus('⚠️  Eleven Labs unexpectedly succeeded (key might be configured server-side)', 'warning');
+                } else {
+                    updateStatus('Expected: Eleven Labs failed, now testing automatic fallback to eSpeak...', 'info');
+                    await testEspeakFallback();
+                }
+                
+            } catch (error) {
+                updateStatus('Expected: Eleven Labs failed, now testing automatic fallback...', 'info');
+                setTimeout(() => testEspeakFallback(), 1000);
+            }
+        }
+    </script>
+</body>
+</html>

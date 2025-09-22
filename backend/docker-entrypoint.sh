@@ -7,31 +7,30 @@ if [ -z "$DATABASE_URL" ]; then
   exit 1
 fi
 
-# Ensure prisma client/binaries are ready
+# Ensure prisma client/binaries are ready and apply migrations idempotently
 npx prisma generate >/dev/null 2>&1 || true
 
-# Always use db push to avoid migration provider mismatch across environments
-apply_schema() {
-  npx prisma db push >/dev/null 2>&1
+apply_migrations() {
+  npx prisma migrate deploy >/dev/null 2>&1
   return $?
 }
 
-# Try to wait for DB and apply schema (simple loop)
+# Wait for DB readiness and apply migrations
 ATTEMPTS=0
-until apply_schema; do
+until apply_migrations; do
   ATTEMPTS=$((ATTEMPTS+1))
-  if [ "$ATTEMPTS" -ge 15 ]; then
-  echo "ERROR: Could not connect/apply schema to database after $ATTEMPTS attempts" >&2
-  echo "--- db push output (last attempt) ---" >&2
-  npx prisma db push || true
+  if [ "$ATTEMPTS" -ge 30 ]; then
+    echo "ERROR: Could not connect/apply migrations after $ATTEMPTS attempts" >&2
+    echo "--- migrate deploy output (last attempt) ---" >&2
+    npx prisma migrate deploy || true
     exit 1
   fi
-  echo "Database not ready yet or schema apply failed. Retrying in 2s... ($ATTEMPTS)"
+  echo "Database not ready yet or migrate deploy failed. Retrying in 2s... ($ATTEMPTS)"
   sleep 2
 done
 
-# Seed only when explicitly enabled
-if [ "${SEED_DB:-false}" = "true" ]; then
+# Optional seed (guarded and non-fatal)
+if [ "${SEED_ON_START:-false}" = "true" ]; then
   echo "Seeding database..."
   npm run db:seed || true
 fi

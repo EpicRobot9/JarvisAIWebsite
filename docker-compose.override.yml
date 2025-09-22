@@ -1,0 +1,8 @@
+services:
+  backend:
+    # Optional live-edit mount (beware: this hides the built dist inside the image)
+    volumes:
+      - ./backend:/app
+    # Use entrypoint instead of command to avoid Node trying to execute the .sh file
+    # When bind-mounting, the executable bit may be missing on host. Ensure +x then exec.
+    entrypoint: ["sh", "-lc", "chmod +x /app/docker-entrypoint.sh; exec /app/docker-entrypoint.sh"]

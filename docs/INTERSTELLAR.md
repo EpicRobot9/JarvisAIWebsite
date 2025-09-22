@@ -3,6 +3,14 @@
 ## Overview
 The Interstellar Manager is a UI for managing Interstellar codespaces through n8n integrations. It provides granular control over current and backup codespaces, with separate production and test environments.
 
+## Navigation
+
+- Interstellar Manager (user‑facing): `/interstellar`
+- Admin Panel (site administration): `/admin`
+- Interstellar Admin (admin tools specific to Interstellar): `/admin/interstellar`
+
+Note: The Admin Panel no longer auto‑redirects to `/admin/interstellar`. Use the “Admin Panel” button for site admin tasks and the “Interstellar Manager” link for Interstellar operations.
+
 ## Endpoints & Modes
 
 Interstellar Manager uses four configurable n8n webhook endpoints, editable via the Admin Panel:
@@ -111,3 +119,6 @@ The UI respects the Prod/Test toggle state, which persists across sessions.
 - Added admin-gated NewBackUp action with confirmation
 - Added Swap and Blocked codespace flows
 - Added documentation and updated Admin Panel
+
+**September 14, 2025**
+- Clarified navigation: Admin Panel is at `/admin` (no auto-redirect), Interstellar Admin at `/admin/interstellar`, user-facing Interstellar Manager at `/interstellar`.

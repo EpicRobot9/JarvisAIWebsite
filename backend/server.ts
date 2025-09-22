@@ -13,7 +13,7 @@ import fetch from 'node-fetch'
 import { z } from 'zod'
 import { WebSocketServer } from 'ws'
 import type { WebSocket } from 'ws'
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import interstellarRouter from './interstellar.js'
 
 dotenv.config()
@@ -612,7 +612,7 @@ app.post('/api/admin/reset-password', requireAuth, requireAdmin, async (req: any
 })
 
 // Transcription route
-const openaiEnvClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const openaiEnvClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
 app.post('/api/transcribe', requireAuth, upload.single('file'), async (req: any, res) => {
   try {
     const file = req.file
@@ -643,20 +643,20 @@ app.post('/api/stt', requireAuth, upload.single('audio'), async (req: any, res) 
   try {
     const file = req.file
     if (!file) return res.status(400).json({ error: 'missing_audio' })
+
+    // OpenAI cloud STT
     const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
-      const dbKey = await getSettingValue('OPENAI_API_KEY')
-      if (!process.env.OPENAI_API_KEY && !dbKey && !headerKey) return res.status(400).json({ error: 'stt_not_configured' })
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    if (!process.env.OPENAI_API_KEY && !dbKey && !headerKey) return res.status(400).json({ error: 'stt_not_configured' })
 
     const preferred = (process.env.TRANSCRIBE_MODEL || process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe').trim()
-    // Provide a resilient fallback order
     const candidates = Array.from(new Set([
       preferred,
       preferred === 'whisper-1' ? 'gpt-4o-mini-transcribe' : 'whisper-1',
     ]))
 
-  const oa = new OpenAI({ apiKey: headerKey || dbKey || process.env.OPENAI_API_KEY! })
+    const oa = new OpenAI({ apiKey: headerKey || dbKey || process.env.OPENAI_API_KEY! })
     const fileInput = await toFile(Buffer.from(file.buffer), file.originalname || 'audio.webm', { type: file.mimetype || 'audio/webm' })
-
     let lastErr: any = null
     for (const model of candidates) {
       try {
@@ -665,13 +665,202 @@ app.post('/api/stt', requireAuth, upload.single('audio'), async (req: any, res) 
         return res.json({ text, model })
       } catch (e) {
         lastErr = e
-        // Try next candidate
       }
     }
     const detail = lastErr instanceof Error ? lastErr.message : String(lastErr)
     res.status(502).json({ error: 'stt_failed', detail, tried: candidates })
   } catch (e) {
     res.status(502).json({ error: 'stt_failed', detail: (e as Error).message })
+  }
+})
+
+// Jarvis Notes: summarize a transcript into organized notes using OpenAI
+app.post('/api/notes/summarize', requireAuth, async (req: any, res) => {
+  try {
+    const raw = (req.body?.text ?? '').toString()
+    const text = raw.trim()
+    if (!text) return res.status(400).json({ error: 'missing_text' })
+
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+
+    // Optional custom instructions and features
+    const userPrefsKey = `NOTES_PREFS:${req.user.id}`
+    let storedPrefs: any = null
+    try {
+      const v = await getSettingValue(userPrefsKey)
+      storedPrefs = v ? JSON.parse(v) : null
+    } catch {}
+  const body = req.body || {}
+  const customInstructions: string = (body.instructions ?? storedPrefs?.instructions ?? '').toString()
+  // Default collapsible to true when not provided anywhere
+  const rawCollapsible = (Object.prototype.hasOwnProperty.call(body, 'collapsible') ? body.collapsible : storedPrefs?.collapsible)
+  const collapsible: boolean = rawCollapsible === undefined ? true : Boolean(rawCollapsible)
+  // Categories: keep existing behavior; default to true if entirely unset
+  const rawCategories = (Object.prototype.hasOwnProperty.call(body, 'categories') ? body.categories : storedPrefs?.categories)
+  const categories: boolean = rawCategories === undefined ? true : Boolean(rawCategories)
+
+    const oa = new OpenAI({ apiKey })
+    const models = ['gpt-4o', 'gpt-4o-mini']
+    let lastErr: any = null
+    for (const model of models) {
+      try {
+        // Build guidance text based on features
+        const guidanceParts: string[] = []
+        if (customInstructions) guidanceParts.push(`User preferences: ${customInstructions}`)
+        if (categories) guidanceParts.push('Group content into clear categories with headings.')
+        if (collapsible) guidanceParts.push('Use HTML <details><summary>Section</summary>... </details> blocks to make sections collapsible where it improves readability. Keep content valid Markdown/HTML mix.')
+
+        const r = await oa.chat.completions.create({
+          model,
+          temperature: 0.2,
+          max_tokens: 900,
+          messages: [
+            { role: 'system', content: 'You are an expert summarizer and note‑taker. Convert transcripts or free‑form text into a clear, concise summary. Do not assume it is a meeting—adapt structure to the content. Prefer short paragraphs and bullet points when helpful. Use valid Markdown. If you include collapsible sections (e.g., <details>), keep them minimal and valid.' },
+            { role: 'user', content: `Transcript:\n\n${text}\n\nProduce a concise, general‑purpose summary. If useful, organize with headings like “Highlights” and “Key Points”. Only include To‑Dos with checkboxes when the text explicitly contains tasks; do not fabricate tasks or attendees. Avoid meeting‑specific framing unless clearly stated. ${guidanceParts.length ? '\n\nAdditional guidance:\n- ' + guidanceParts.join('\n- ') : ''} Do not invent details.` }
+          ] as any
+        })
+        const notes = r.choices?.[0]?.message?.content?.toString() || ''
+        return res.json({ notes, model })
+      } catch (e) {
+        lastErr = e
+      }
+    }
+    const detail = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    return res.status(502).json({ error: 'summarize_failed', detail })
+  } catch (e) {
+    return res.status(500).json({ error: 'unexpected_error' })
+  }
+})
+
+// Notes settings (per-user) stored in Setting as NOTES_PREFS:<userId>
+app.get('/api/notes/settings', requireAuth, async (req: any, res) => {
+  try {
+    const key = `NOTES_PREFS:${req.user.id}`
+    let prefs = { instructions: '', collapsible: true, categories: true, icon: 'triangle', color: 'slate', expandAll: false, expandCategories: false }
+    const v = await getSettingValue(key)
+    if (v) {
+      try { prefs = { ...prefs, ...(JSON.parse(v) || {}) } } catch {}
+    }
+    res.json(prefs)
+  } catch {
+    res.status(500).json({ error: 'read_failed' })
+  }
+})
+app.post('/api/notes/settings', requireAuth, async (req: any, res) => {
+  try {
+    const body = req.body || {}
+    const instructions = typeof body.instructions === 'string' ? body.instructions : ''
+    const collapsible = Boolean(body.collapsible)
+    const categories = Boolean(body.categories)
+    const iconRaw = (typeof body.icon === 'string' ? body.icon : 'triangle').toLowerCase()
+    const colorRaw = (typeof body.color === 'string' ? body.color : 'slate').toLowerCase()
+    const expandAll = Boolean(body.expandAll)
+    const expandCategories = Boolean(body.expandCategories)
+    const icon = ['triangle','chevron','plusminus'].includes(iconRaw) ? iconRaw : 'triangle'
+    const color = ['slate','blue','emerald','amber','rose'].includes(colorRaw) ? colorRaw : 'slate'
+    const key = `NOTES_PREFS:${req.user.id}`
+    const payload = JSON.stringify({ instructions, collapsible, categories, icon, color, expandAll, expandCategories })
+    await setSettingValue(key, payload)
+    res.json({ ok: true })
+  } catch {
+    res.status(500).json({ error: 'save_failed' })
+  }
+})
+
+// Jarvis Notes persistence APIs
+// Create a note (transcript + notes). Returns created note.
+app.post('/api/notes', requireAuth, async (req: any, res) => {
+  try {
+    const body = req.body || {}
+    const transcript = (body.transcript || '').toString()
+    const notes = (body.notes || '').toString()
+    const title = typeof body.title === 'string' ? body.title : ''
+    const pinned = Boolean(body.pinned)
+    if (!transcript && !notes) return res.status(400).json({ error: 'missing_fields' })
+    const row = await (prisma as any).note.create({ data: { userId: req.user.id, transcript, notes, title, pinned } })
+    res.json({ ok: true, note: row })
+  } catch (e) {
+    res.status(500).json({ error: 'create_failed' })
+  }
+})
+
+// List notes with optional text search and cursor pagination
+// Query: ?query=...&take=50&cursor=<id>
+app.get('/api/notes', requireAuth, async (req: any, res) => {
+  try {
+    const take = Math.min(Math.max(Number(req.query.take || 50), 1), 200)
+    const cursor = (req.query.cursor as string | undefined) || undefined
+    const q = ((req.query.query as string | undefined) || '').trim()
+    const pinnedOnly = (req.query.pinned as string | undefined)?.toLowerCase() === 'true'
+    const where: any = { userId: req.user.id }
+    if (pinnedOnly) where.pinned = true
+    if (q) {
+      // Basic contains search across transcript and notes (case-insensitive)
+      where.OR = [
+        { transcript: { contains: q, mode: 'insensitive' } },
+        { notes: { contains: q, mode: 'insensitive' } },
+        { title: { contains: q, mode: 'insensitive' } },
+      ]
+    }
+    // Sort pinned first, then most recent
+    const items = await (prisma as any).note.findMany({
+      where,
+      orderBy: [ { pinned: 'desc' }, { createdAt: 'desc' } ],
+      take,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {})
+    })
+    res.json({ items, nextCursor: items.length === take ? items[items.length - 1]?.id : null })
+  } catch (e) {
+    res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// Update a note (partial: transcript/notes)
+app.patch('/api/notes/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    if (!id) return res.status(400).json({ error: 'missing_id' })
+    const body = req.body || {}
+    const data: any = {}
+    if (typeof body.transcript === 'string') data.transcript = body.transcript
+    if (typeof body.notes === 'string') data.notes = body.notes
+    if (typeof body.title === 'string') data.title = body.title
+    if (typeof body.pinned === 'boolean') data.pinned = body.pinned
+    if (Object.keys(data).length === 0) return res.status(400).json({ error: 'nothing_to_update' })
+    // Ensure ownership
+    const existing = await (prisma as any).note.findUnique({ where: { id } })
+    if (!existing || existing.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const row = await (prisma as any).note.update({ where: { id }, data })
+    res.json({ ok: true, note: row })
+  } catch (e) {
+    res.status(500).json({ error: 'update_failed' })
+  }
+})
+
+// Delete a single note
+app.delete('/api/notes/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    if (!id) return res.status(400).json({ error: 'missing_id' })
+    const existing = await (prisma as any).note.findUnique({ where: { id } })
+    if (!existing || existing.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    await (prisma as any).note.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: 'delete_failed' })
+  }
+})
+
+// Clear all notes for current user
+app.delete('/api/notes', requireAuth, async (req: any, res) => {
+  try {
+    await (prisma as any).note.deleteMany({ where: { userId: req.user.id } })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: 'clear_failed' })
   }
 })
 
@@ -888,6 +1077,264 @@ app.get('/api/tts/stream', requireAuth, async (req: any, res) => {
     r.body.pipe(res)
   } catch (e) {
     try { res.status(500).json({ error: 'tts_failed' }) } catch {}
+  }
+})
+
+// Fallback TTS using eSpeak-NG (lightweight, open-source)
+app.post('/api/tts/fallback', requireAuth, async (req: any, res) => {
+  try {
+    const { text, voice, rate } = req.body || {}
+    if (!text) return res.status(400).json({ error: 'missing_text' })
+
+    // Map UI voice codes to pico languages
+    const lang = String(voice || '').trim() || 'en-US'
+    const langMap: Record<string, string> = {
+      'en': 'en-US',
+      'en-US': 'en-US',
+      'en-GB': 'en-GB',
+      'de-DE': 'de-DE',
+      'es-ES': 'es-ES',
+      'fr-FR': 'fr-FR',
+      'it-IT': 'it-IT'
+    }
+    const picoLang = langMap[lang] || 'en-US'
+
+    // Rate mapping: UI 0.5..1.5 -> sox tempo 0.5..1.5 (tempo changes speed without pitch)
+    let tempo = Number(rate)
+    if (!Number.isFinite(tempo)) tempo = 0.85
+    tempo = Math.max(0.5, Math.min(1.5, tempo))
+
+    // Use espeak-ng to generate WAV to stdout with language, then sox to adjust tempo (speed without pitch), then lame to MP3
+    // Map picoLang to closest espeak voice code
+    const espeakVoiceMap: Record<string, string> = {
+      'en-US': 'en-us',
+      'en-GB': 'en-gb',
+      'de-DE': 'de',
+      'es-ES': 'es',
+      'fr-FR': 'fr',
+      'it-IT': 'it'
+    }
+    const espeakVoice = espeakVoiceMap[picoLang] || 'en-us'
+    // espeak-ng default wpm ~ 160; keep constant and use sox tempo instead
+    const espeak = spawn('espeak-ng', [
+      '--stdout',
+      '-v', espeakVoice,
+      '-s', '160',
+      text
+    ])
+    const sox = spawn('sox', [
+      '-t', 'wav', '-',
+      '-t', 'wav', '-',
+      'tempo', tempo.toFixed(2)
+    ])
+    const lame = spawn('lame', [
+      '-r', '--preset', 'voice', '-', '-'
+    ])
+
+    espeak.on('error', (err) => { console.error('espeak-ng error:', err); if (!res.headersSent) res.status(500).json({ error: 'tts_failed' }) })
+    sox.on('error', (err) => { console.error('sox error:', err); if (!res.headersSent) res.status(500).json({ error: 'tts_failed' }) })
+    lame.on('error', (err) => { console.error('lame error:', err); if (!res.headersSent) res.status(500).json({ error: 'tts_failed' }) })
+
+    res.setHeader('Content-Type', 'audio/mpeg')
+    espeak.stdout.pipe(sox.stdin)
+    sox.stdout.pipe(lame.stdin)
+    lame.stdout.pipe(res)
+  } catch (e) {
+    console.error('Fallback TTS error:', e)
+    if (!res.headersSent) res.status(500).json({ error: 'tts_failed' })
+  }
+})
+
+// ==========================
+// Study Tools: generation & grading
+// ==========================
+type StudyGenerateBody = {
+  subject?: string
+  info?: string
+  noteIds?: string[]
+  tools?: Array<'guide' | 'flashcards' | 'test' | 'match'>
+  title?: string
+}
+
+// Helper: fetch notes by ids for current user and concatenate their content
+async function getNotesTextForUser(userId: string, noteIds: string[] | undefined): Promise<string> {
+  if (!noteIds || noteIds.length === 0) return ''
+  try {
+    const items = await (prisma as any).note.findMany({
+      where: { userId, id: { in: noteIds } },
+      select: { transcript: true, notes: true, title: true }
+    })
+    return items.map((n: any) => `Title: ${n.title || ''}\nTranscript: ${n.transcript || ''}\nNotes: ${n.notes || ''}`).join('\n\n')
+  } catch {
+    return ''
+  }
+}
+
+// POST /api/study/generate -> creates a StudySet row
+app.post('/api/study/generate', requireAuth, async (req: any, res) => {
+  try {
+    const body: StudyGenerateBody = req.body || {}
+    const subject = (body.subject || '').toString().trim()
+    const info = (body.info || '').toString().trim()
+    const noteIds = Array.isArray(body.noteIds) ? body.noteIds.filter(x => typeof x === 'string' && x) : []
+    const tools: Array<'guide'|'flashcards'|'test'|'match'> = (Array.isArray(body.tools) && body.tools.length ? body.tools : ['guide', 'flashcards']).filter(Boolean) as any
+    const title = (body.title || subject || (info ? info.slice(0, 60) : '') || 'Study Set').toString()
+
+    // Compose source text from provided info and selected notes
+    const notesText = await getNotesTextForUser(req.user.id, noteIds)
+    const source = [
+      subject ? `Subject: ${subject}` : '',
+      info ? `Info:\n${info}` : '',
+      notesText ? `Linked Notes:\n${notesText}` : ''
+    ].filter(Boolean).join('\n\n').trim()
+    if (!source) return res.status(400).json({ error: 'missing_input' })
+
+    // OpenAI key resolution
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+
+    const oa = new OpenAI({ apiKey })
+    // Build instructions for generation
+    const wantGuide = tools.includes('guide')
+    const wantFlash = tools.includes('flashcards')
+    const wantTest = tools.includes('test')
+    const wantMatch = tools.includes('match')
+    const system = 'You are a helpful study assistant. Given source material, produce structured study artifacts in strict JSON. Do not include explanations outside of JSON.'
+    const userPrompt = `Source material:\n\n${source}\n\nProduce a JSON object with up to these keys depending on the request: guide, flashcards, test, match.\n- guide: markdown string (use headings, bullet points; concise).\n- flashcards: array of { front: string, back: string }. 12-30 cards depending on material.\n- test: array of multiple-choice questions; each as { question: string, choices: string[4], answerIndex: 0-3 }. 8-20 questions.\n- match: array of pairs { left: string, right: string } for term-definition matching (8-20 pairs).\nKeep content appropriate and based only on provided material. Avoid fabricating details.`
+    const toolList = [ wantGuide && 'guide', wantFlash && 'flashcards', wantTest && 'test', wantMatch && 'match' ].filter(Boolean).join(', ')
+    const assistantHint = `Requested sections: ${toolList}. Return strictly valid JSON with only those keys.`
+    // Try gpt-4o then gpt-4o-mini
+    const models = ['gpt-4o', 'gpt-4o-mini']
+    let json: any = null
+    let lastErr: any = null
+    for (const model of models) {
+      try {
+        const r = await oa.chat.completions.create({
+          model,
+          temperature: 0.2,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: userPrompt },
+            { role: 'assistant', content: assistantHint }
+          ] as any,
+          response_format: { type: 'json_object' } as any,
+          max_tokens: 1400
+        })
+        const txt = r.choices?.[0]?.message?.content?.toString() || '{}'
+        json = JSON.parse(txt)
+        break
+      } catch (e) {
+        lastErr = e
+      }
+    }
+    if (!json) return res.status(502).json({ error: 'generate_failed', detail: lastErr instanceof Error ? lastErr.message : String(lastErr) })
+
+    // Validate minimal shape
+    const content: any = {}
+    if (wantGuide && typeof json.guide === 'string') content.guide = json.guide
+    if (wantFlash && Array.isArray(json.flashcards)) content.flashcards = json.flashcards.map((c: any) => ({ front: String(c.front || ''), back: String(c.back || '') })).filter((c: any) => c.front && c.back)
+    if (wantTest && Array.isArray(json.test)) content.test = json.test.map((q: any) => ({
+      question: String(q.question || ''),
+      choices: Array.isArray(q.choices) ? q.choices.map((x: any) => String(x)) : [],
+      answerIndex: Number.isFinite(q.answerIndex) ? Number(q.answerIndex) : 0
+    })).filter((q: any) => q.question && Array.isArray(q.choices) && q.choices.length >= 2)
+    if (wantMatch && Array.isArray(json.match)) content.match = json.match.map((p: any) => ({ left: String(p.left || ''), right: String(p.right || '') })).filter((p: any) => p.left && p.right)
+
+    // Save StudySet
+    const row = await (prisma as any).studySet.create({
+      data: {
+        userId: req.user.id,
+        title,
+        subject: subject || null,
+        sourceText: source,
+        tools: tools as any,
+        linkedNoteIds: noteIds,
+        content
+      }
+    })
+    res.json({ ok: true, set: row })
+  } catch (e) {
+    res.status(500).json({ error: 'generate_failed' })
+  }
+})
+
+// List study sets for current user
+app.get('/api/study/sets', requireAuth, async (req: any, res) => {
+  try {
+    const take = Math.min(Math.max(Number(req.query.take || 50), 1), 200)
+    const cursor = (req.query.cursor as string | undefined) || undefined
+    const where: any = { userId: req.user.id }
+    const items = await (prisma as any).studySet.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {})
+    })
+    res.json({ items, nextCursor: items.length === take ? items[items.length - 1]?.id : null })
+  } catch {
+    res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// Get a single set (ownership enforced)
+app.get('/api/study/sets/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const row = await (prisma as any).studySet.findUnique({ where: { id } })
+    if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    res.json(row)
+  } catch {
+    res.status(500).json({ error: 'read_failed' })
+  }
+})
+
+// Delete a set
+app.delete('/api/study/sets/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const row = await (prisma as any).studySet.findUnique({ where: { id } })
+    if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    await (prisma as any).studySet.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch {
+    res.status(500).json({ error: 'delete_failed' })
+  }
+})
+
+// Grade a flashcard answer using OpenAI for semantic correctness
+// Body: { front: string, expectedBack: string, userAnswer: string }
+app.post('/api/study/grade', requireAuth, async (req: any, res) => {
+  try {
+    const { front, expectedBack, userAnswer } = req.body || {}
+    if (!front || !expectedBack || !userAnswer) return res.status(400).json({ error: 'missing_fields' })
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+    const oa = new OpenAI({ apiKey })
+    const prompt = `Card front: ${front}\nCorrect answer: ${expectedBack}\nUser answer: ${userAnswer}\n\nJudge if the user's answer means the same as the correct answer. Respond in strict JSON: {"correct": boolean, "explanation": string}. Explanation should be brief and point out any key mismatch if incorrect.`
+    const models = ['gpt-4o-mini', 'gpt-4o']
+    let out: any = null
+    for (const model of models) {
+      try {
+        const r = await oa.chat.completions.create({
+          model,
+          temperature: 0,
+          messages: [ { role: 'system', content: 'You grade short answers precisely.' }, { role: 'user', content: prompt } ] as any,
+          response_format: { type: 'json_object' } as any,
+          max_tokens: 200
+        })
+        const txt = r.choices?.[0]?.message?.content?.toString() || '{}'
+        out = JSON.parse(txt)
+        break
+      } catch {}
+    }
+    if (!out || typeof out.correct !== 'boolean') out = { correct: String(userAnswer).trim().toLowerCase() === String(expectedBack).trim().toLowerCase(), explanation: out?.explanation || '' }
+    res.json(out)
+  } catch {
+    res.status(500).json({ error: 'grade_failed' })
   }
 })
 

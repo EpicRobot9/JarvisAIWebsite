@@ -61,30 +61,7 @@ export function useSession() {
     } catch {}
   }, [state.messages])
 
-  // Re-check inactivity on tab refocus/visibility change; clear stale chats
-  useEffect(() => {
-    const check = () => {
-      const last = getNum(LAST_ACTIVITY_KEY, 0)
-      const now = Date.now()
-      if (!last || now - last > CHAT_INACTIVITY_RESET_MS) {
-        try {
-          localStorage.removeItem(MESSAGES_KEY)
-          localStorage.removeItem(LAST_USER_SENT_KEY)
-          localStorage.removeItem(LAST_ACTIVITY_KEY)
-        } catch {}
-        const newConv = crypto.randomUUID()
-        try { localStorage.setItem('jarvis_conversation_id', newConv) } catch {}
-        set(v => ({ ...v, messages: [], conversationId: newConv }))
-      }
-    }
-    const handler = () => { if (typeof document === 'undefined' || !document.hidden) check() }
-    document.addEventListener('visibilitychange', handler)
-    window.addEventListener('focus', handler)
-    return () => {
-      document.removeEventListener('visibilitychange', handler)
-      window.removeEventListener('focus', handler)
-    }
-  }, [])
+  // Removed inactivity-based auto-clear of chat history
 
   useEffect(() => {
     localStorage.setItem('jarvis_session_id', state.sessionId)
@@ -144,10 +121,10 @@ function getNum(key: string, fallback: number): number {
 }
 
 function loadMessagesWithInactivity(): { messages: ChatMessage[]; reset: boolean } {
-  let reset = false
+  // New behavior: never auto-delete due to inactivity. Preserve all stored messages.
   try {
     let raw = localStorage.getItem(MESSAGES_KEY)
-    // Migration: if no new-key data, try legacy UI chat storage
+    // Migration from legacy storage if needed
     if (!raw) {
       const legacy = localStorage.getItem('jarvis_chat_v1')
       if (legacy) {
@@ -163,7 +140,6 @@ function loadMessagesWithInactivity(): { messages: ChatMessage[]; reset: boolean
                 timestamp: x.at ? new Date(Number(x.at)).toISOString() : new Date().toISOString(),
                 via: undefined,
               }))
-              // Drop entries that have no textual content (e.g., audio-only)
               .filter(m => (m.text || '').trim().length > 0)
             if (migrated.length) {
               raw = JSON.stringify(migrated)
@@ -173,10 +149,9 @@ function loadMessagesWithInactivity(): { messages: ChatMessage[]; reset: boolean
         } catch {}
       }
     }
-    if (!raw) return { messages: [], reset }
+    if (!raw) return { messages: [], reset: false }
     const arr = JSON.parse(raw)
-    if (!Array.isArray(arr)) return { messages: [], reset }
-    // Basic shape validation
+    if (!Array.isArray(arr)) return { messages: [], reset: false }
     const messages: ChatMessage[] = arr
       .filter(x => x && typeof x === 'object')
       .map(x => ({
@@ -186,30 +161,17 @@ function loadMessagesWithInactivity(): { messages: ChatMessage[]; reset: boolean
         timestamp: typeof x.timestamp === 'string' ? x.timestamp : new Date().toISOString(),
         via: x.via === 'typed' || x.via === 'voice' || x.via === 'api' ? x.via : undefined,
       }))
-    // Seed last activity from most recent message if missing
+    // Seed last activity for completeness but do not use for auto-delete
     const lastFromMsgs = (() => {
       if (!messages.length) return 0
       const t = Date.parse(messages[messages.length - 1].timestamp || '')
       return Number.isFinite(t) ? t : 0
     })()
-    let last = getNum(LAST_ACTIVITY_KEY, 0)
-    if (!last && lastFromMsgs) {
-      last = lastFromMsgs
-      try { localStorage.setItem(LAST_ACTIVITY_KEY, String(last)) } catch {}
+    if (lastFromMsgs) {
+      try { localStorage.setItem(LAST_ACTIVITY_KEY, String(lastFromMsgs)) } catch {}
     }
-    const now = Date.now()
-    if (last && now - last <= CHAT_INACTIVITY_RESET_MS) {
-      return { messages, reset }
-    }
-    // Inactive too long (or no last activity at all): clear persisted state
-    try {
-      localStorage.removeItem(MESSAGES_KEY)
-      localStorage.removeItem(LAST_USER_SENT_KEY)
-      localStorage.removeItem(LAST_ACTIVITY_KEY)
-    } catch {}
-    reset = true
-    return { messages: [], reset }
+    return { messages, reset: false }
   } catch {
-    return { messages: [], reset }
+    return { messages: [], reset: false }
   }
 }

@@ -34,8 +34,38 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
   const recorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<BlobPart[]>([])
   const keyHoldRef = useRef<boolean>(false)
+  const shouldBeListeningRef = useRef<boolean>(false)
+  const restartBackoffRef = useRef<number>(0)
+  const resumeGuardRef = useRef<boolean>(false)
+  const wakeLockRef = useRef<any>(null)
 
   useEffect(()=>()=>cleanup(), [])
+
+  const acquireWakeLock = useCallback(async () => {
+    try {
+      if (document.visibilityState !== 'visible') return
+      // @ts-ignore experimental API
+      if ('wakeLock' in navigator && (navigator as any).wakeLock?.request) {
+        // @ts-ignore
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen')
+        wakeLockRef.current?.addEventListener?.('release', () => { wakeLockRef.current = null })
+      }
+    } catch {}
+  }, [])
+  const releaseWakeLock = useCallback(()=>{ try { wakeLockRef.current?.release?.() } catch {}; wakeLockRef.current = null }, [])
+
+  const restartWithBackoff = useCallback(()=>{
+    if (!shouldBeListeningRef.current) return
+    if (resumeGuardRef.current) return
+    resumeGuardRef.current = true
+    const next = restartBackoffRef.current > 0 ? Math.min(30000, restartBackoffRef.current * 2) : 500
+    restartBackoffRef.current = next
+    window.setTimeout(async ()=>{
+      resumeGuardRef.current = false
+      if (!shouldBeListeningRef.current) return
+      await startListening()
+    }, next)
+  }, [])
 
   const startListening = useCallback(async ()=>{
     if (state === 'listening') return
@@ -45,8 +75,18 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
       chunksRef.current = []
       const rec = new MediaRecorder(stream)
       rec.ondataavailable = (e)=> e.data && chunksRef.current.push(e.data)
+      rec.onerror = () => { if (shouldBeListeningRef.current) restartWithBackoff() }
+      rec.onstop = () => {
+        // If we didn't explicitly stop, try to recover
+        if (shouldBeListeningRef.current) restartWithBackoff()
+      }
+      // If underlying track ends (sleep, device detach), attempt to resume
+      stream.getTracks().forEach(t => t.addEventListener('ended', () => { if (shouldBeListeningRef.current) restartWithBackoff() }))
       recorderRef.current = rec
       rec.start()
+      shouldBeListeningRef.current = true
+      restartBackoffRef.current = 0
+      try { await acquireWakeLock() } catch {}
       setState('listening')
     } catch (e) {
       const err = new AppError('mic_denied', 'Microphone permission denied.', e)
@@ -69,8 +109,10 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
 
   const stopAndSend = useCallback(async ()=>{
     if (state !== 'listening') return
+    shouldBeListeningRef.current = false
     const blob = await stopRecorderAndGetBlob()
     cleanup()
+    releaseWakeLock()
     setState('processing')
     try {
       const { text } = await transcribeAudio(blob)
@@ -121,6 +163,7 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
     mediaRef.current = null
     recorderRef.current = null
     chunksRef.current = []
+    releaseWakeLock()
   }
 
   // Space PTT
@@ -147,6 +190,25 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
       window.removeEventListener('keyup', up)
     }
   }, [startListening, stopAndSend])
+
+  // Auto-resume after sleep/tab hidden if user expected to be listening
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        if (shouldBeListeningRef.current && state !== 'listening') restartWithBackoff()
+        acquireWakeLock()
+      } else {
+        releaseWakeLock()
+      }
+    }
+    const onPageShow = () => { if (shouldBeListeningRef.current && state !== 'listening') restartWithBackoff() }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pageshow', onPageShow)
+    }
+  }, [state, restartWithBackoff, acquireWakeLock, releaseWakeLock])
 
   return {
     state,

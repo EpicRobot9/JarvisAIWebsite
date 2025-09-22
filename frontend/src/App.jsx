@@ -394,6 +394,16 @@ export default function App() {
               <Sparkles size={18}/> Interstellar Manager
             </Link>
           )}
+          {user && (
+            <Link to="/notes" className="jarvis-btn flex items-center gap-2" title="Jarvis Notes">
+              <Sparkles size={18}/> Jarvis Notes
+            </Link>
+          )}
+          {user && (
+            <Link to="/study" className="jarvis-btn flex items-center gap-2" title="Study Builder">
+              <Sparkles size={18}/> Study Builder
+            </Link>
+          )}
           <div className="flex items-center gap-1 rounded-xl border px-2 py-2 bg-white/5 backdrop-blur-md border-cyan-200/20">
             <label className="text-xs mr-1 jarvis-subtle">Webhook:</label>
             <button type="button" onClick={()=>setUseTest(false)} className={`px-2 py-1 rounded text-xs border ${!useTest?'bg-blue-600 text-white':'border-cyan-200/20 hover:bg-white/10'}`}>Prod</button>
@@ -441,6 +451,12 @@ export default function App() {
             <div className="flex gap-2">
               <Link to="/interstellar" className="jarvis-btn jarvis-btn-primary flex items-center gap-2">
                 <Sparkles size={18}/> Interstellar Manager
+              </Link>
+              <Link to="/notes" className="jarvis-btn flex items-center gap-2" title="Jarvis Notes">
+                <Sparkles size={18}/> Jarvis Notes
+              </Link>
+              <Link to="/study" className="jarvis-btn flex items-center gap-2" title="Study Builder">
+                <Sparkles size={18}/> Study Builder
               </Link>
             </div>
           )}

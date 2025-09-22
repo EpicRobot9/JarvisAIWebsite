@@ -21,6 +21,8 @@ model User {
   interstellarRequests InterstellarRequest[] @relation("InterstellarRequestUser")
   interstellarDecisions InterstellarRequest[] @relation("InterstellarRequestDecidedBy")
   logs         ApiLog[]
+  notes        Note[]
+  studySets    StudySet[]
 }
 
 model Session {
@@ -95,4 +97,38 @@ model InterstellarRequest {
 
   @@index([status])
   @@index([userId])
+}
+
+/// Notes captured/summarized in Jarvis Notes feature
+model Note {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  transcript String
+  notes      String
+  title      String   @default("")
+  pinned     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@index([userId, pinned, createdAt])
+}
+
+/// Study sets generated for a subject/topic with optional linked notes
+model StudySet {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  title        String
+  subject      String?
+  sourceText   String?
+  tools        String[] @default([]) // e.g., ["guide","flashcards","test","match"]
+  linkedNoteIds String[] @default([])
+  content      Json     // { guide?: string, flashcards?: Flashcard[], test?: Question[], match?: Pair[] }
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, createdAt])
 }

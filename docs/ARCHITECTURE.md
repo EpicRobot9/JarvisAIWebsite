@@ -8,6 +8,7 @@
 Key flows:
 - Auth: signup -> (optional approval) -> signin -> session cookie -> /api/auth/me.
 - Voice: browser records webm -> POST /api/transcribe -> post text to n8n webhook (Prod/Test selectable) -> poll /api/jarvis/callback/:id -> optional TTS.
+	- In call mode, TTS prefers `/api/tts/stream` and maintains a FIFO queue. If streaming fails, it falls back to `/api/tts`, `/api/tts/fallback`, then Web Speech.
 - Text: post text directly to n8n webhook (Prod/Test selectable). If webhook replies immediately, show it; otherwise poll callback.
 
 Event delivery
@@ -16,6 +17,7 @@ Event delivery
 Call‑mode speech
 - In call mode, the UI speaks via low‑latency streaming TTS (`/api/tts/stream`) and queues multiple messages sequentially. If streaming fails, it falls back to `/api/tts` with buffered playback.
 - The UI auto‑unmutes at call start and restores the prior mute state when the call ends.
+ - Optional Continuous Conversation mode: after speaking, the UI may chime and re‑open the mic for a follow‑up with configurable no‑speech timeouts and a brief “Speak now…” nudge.
 
 Webhook integration
 - Frontend decides target URL based on a persisted toggle; defaults can be set via `VITE_WEBHOOK_URL` and `VITE_WEBHOOK_TEST_URL`.
@@ -30,3 +32,34 @@ TTS configuration and overrides
 - backend/: Node/Express, Prisma schema/seed.
 - frontend/: Vite React app, compiled to static files for Nginx.
 - docker-compose.yml: Orchestration for db/backend/frontend.
+
+Routes and surfaces:
+- Portal UI: `/`
+- Portal (legacy view): `/portal`
+- Admin Panel: `/admin`
+- Interstellar Admin: `/admin/interstellar`
+- Interstellar Manager: `/interstellar`
+- Study Dashboard: `/study`
+- Study Tools:
+  - Study Set View: `/study/sets/:id` (for guides, tests, mixed content)
+  - Flashcard Viewer: `/study/sets/:id/flashcards` (main card browsing interface)
+  - Study Mode: `/study/sets/:id/study` (interactive flashcard game)
+  - Test Mode: `/study/sets/:id/test`
+  - Match Games: `/study/sets/:id/match`
+
+Jarvis Notes
+- Page: `/notes` (Jarvis Notes)
+	- Live transcript with Play/Stop. Pressing Play with an existing transcript appends new speech to it (no new note is created).
+	- Auto‑summarize toggle: when enabled, Stop triggers summarization; otherwise use Manual Summarize.
+	- History panel with search, titles, pinning. Updating an existing note avoids duplicate entries.
+	- Notes render in Markdown with safe HTML collapsible sections (`<details><summary>…</summary>…</details>`).
+	- A Home button links back to the main site.
+
+Backend
+- Summarize: `POST /api/notes/summarize` (tries `gpt-4o`, falls back to `gpt-4o-mini`). Accepts `instructions`, `collapsible`, `categories`; defaults `collapsible/categories` to true when unset.
+- Settings: `GET/POST /api/notes/settings` — per‑user prefs: instructions, collapsible, categories, icon, color, expandAll, expandCategories.
+- CRUD: `POST/GET/PATCH/DELETE /api/notes` — store transcript, notes, title, pinned.
+
+Rendering & safety
+- Frontend uses `react-markdown` + `remark-gfm` + `rehype-raw` + `rehype-sanitize` with allowlisted `details/summary` tags.
+- UI supports configurable disclosure icon (triangle/chevron/plus‑minus), accent color, and auto‑expand behavior (all or top‑level only).

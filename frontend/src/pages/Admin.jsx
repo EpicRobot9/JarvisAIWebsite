@@ -35,14 +35,7 @@ export default function Admin() {
           nav('/signin')
           return
         }
-        
-        // Check if admin should be redirected to Interstellar admin interface
-        // Only redirect if there's no specific admin task in the URL and no stay parameter
-        const urlParams = new URLSearchParams(window.location.search)
-        if (window.location.pathname === '/admin' && !urlParams.has('stay')) {
-          nav('/admin/interstellar')
-          return
-        }
+        // Stay on the main Admin Panel (no auto-redirect to Interstellar)
   const s = await fetch('/api/admin/settings', { credentials: 'include' })
   if (s.ok) setSettings(await s.json())
         const k = await fetch('/api/admin/keys', { credentials: 'include', cache: 'no-store' }).catch(()=>null)

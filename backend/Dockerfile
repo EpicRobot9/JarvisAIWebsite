@@ -11,7 +11,13 @@ RUN npm run build
 FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+		ca-certificates \
+		openssl \
+		espeak-ng \
+		lame \
+		sox \
+	&& rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
@@ -19,4 +25,5 @@ COPY --from=build /app/prisma ./prisma
 EXPOSE 8080
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
-CMD ["/app/docker-entrypoint.sh"]
+# Override the Node image entrypoint so our shell script runs (and not `node /app/docker-entrypoint.sh`)
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -29,7 +29,7 @@ cd /opt/jarvis
 Create the production `.env` at the repo root:
 
 ```
-DATABASE_URL=postgresql://postgres:postgres@db:5432/jarvis
+DATABASE_URL=postgresql://jarvis:jarvis@db:5432/jarvis?schema=public
 SESSION_SECRET=change-me-very-strong
 BACKEND_PORT=8080
 FRONTEND_ORIGIN=https://techexplore.us
@@ -38,19 +38,22 @@ ELEVENLABS_API_KEY=
 REQUIRE_ADMIN_APPROVAL=false
 LOCK_NEW_ACCOUNTS=false
 ADMIN_EMAILS=admin@example.com
-SEED_DB=true
+SEED_ON_START=false
+ADMIN_SEED_MODE=ensure
 VITE_WEBHOOK_URL=
 VITE_WEBHOOK_TEST_URL=
 VITE_CALLBACK_URL=/api/jarvis/callback
 VITE_SOURCE_NAME=jarvis-portal
 INTEGRATION_PUSH_TOKEN=generate-a-long-random-token
+NODE_ENV=production
 ```
 
 Notes
 - Set `FRONTEND_ORIGIN` to your final HTTPS origin so cookies/CORS line up.
-- After the first bootstrapped admin login, set `SEED_DB=false`.
+- Seeding is opt-in now via `SEED_ON_START=true`. Leave it `false` for production restarts.
 - Ensure `ADMIN_SEED_MODE=ensure` for steady‑state (it won't reset passwords on future restarts).
 - Persistence: by default we use a stable named volume `jarvis_db_data`. To hard‑pin data to a host path, use the optional persist override below.
+- Prisma in production uses `prisma migrate deploy` automatically on container start. Do not use `db push` or `migrate reset` in prod.
 
 ## 2) Start the app without binding host ports
 
@@ -79,6 +82,10 @@ docker compose -p techexplore \
 ```
 
 This bind‑mounts Postgres data to `/opt/jarvis/db` on the host. Without this, a named volume `jarvis_db_data` is used, which is still persistent but can be replaced if you change `COMPOSE_PROJECT_NAME` or run `down --volumes`.
+
+If you previously initialized Postgres with the default `postgres/postgres` credentials, switching to the `jarvis/jarvis` user in compose will not update the existing database automatically. Either:
+- Keep your existing user by setting `DATABASE_URL` accordingly; or
+- Start with a fresh volume name (set `DB_VOLUME_NAME` in `.env`) or clear the old volume if acceptable.
 
 Shortcut (one-liner) installer
 
@@ -201,10 +208,15 @@ docker compose -p techexplore ps
 ```
 You should see `db`, `backend`, `frontend` (and `cloudflared` if token provided) in `Up` state.
 
-## 5) Ensure env is correct (no changes except domain)
+Startup behavior:
+- The `db` service has a healthcheck; `backend` waits until DB is healthy before starting.
+- On start, backend runs `prisma migrate deploy` to apply pending migrations safely.
+
+## 5) Ensure env is correct (domain and DB)
 
 - The installer/deploy script preserves your `.env` as-is.
 - If you provided `--domain techexplore.us`, it updates only `FRONTEND_ORIGIN=https://techexplore.us`.
+- Ensure `DATABASE_URL` matches the compose DB user/password. Defaults are `jarvis:jarvis` against service `db`.
 
 ## 6) Add the Public Hostname in Cloudflare Tunnel
 
@@ -254,7 +266,7 @@ docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml u
 Troubleshooting: data appears to “reset”
 
 - Check whether the DB volume changed. If you used different project names (the `-p` flag) across runs, Docker created separate volume namespaces. Fix: always use a stable `-p techexplore` and/or set an explicit volume name via `DB_VOLUME_NAME` in `.env`, or use `docker-compose.persist.yml` with `DB_DATA_DIR`.
-- Verify `.env` does not keep `ADMIN_SEED_MODE=reset` or `SEED_DB=true` unintentionally. Reset mode will update admin password every boot; seeding itself does not delete users, but if the DB is empty at start you’ll see a brand new admin created that minute.
+- Verify `.env` does not keep `ADMIN_SEED_MODE=reset` or `SEED_ON_START=true` unintentionally. Reset mode will update admin password every boot; seeding itself does not delete users, but if the DB is empty at start you’ll see a brand new admin created that minute.
 - After backend starts, the entrypoint logs either `DB ready. users=..., settings=...` or a warning when it detects an empty DB. If you see the empty warning on a restart, your DB files were not persisted.
 - Avoid `docker compose down --volumes` unless you intentionally want to erase the database.
 

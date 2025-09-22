@@ -4,12 +4,36 @@ A simple full-stack app with an Express/Prisma backend and a React (Vite) fronte
 
 Highlights
 - Modern UI (at `/`) with chat and press‑to‑talk.
+- Jarvis Notes at `/notes`: capture live transcripts and summarize into organized notes with optional collapsible sections. Per‑user preferences (instructions, categories/collapsible, icon, color, expand behavior) at `/notes/settings`.
+- Always‑Listening mode with wake word (“Jarvis”) and hands‑free flow.
+- Wake word customization: multiple phrases, optional chime, volume, presets, and custom sound upload with Test button.
+- Import/Export of wake/chime settings (JSON) and a Save‑required banner after import.
+- VAD endpointing to auto‑stop: selectable engine (JS or WASM MicVAD) with tuning controls (SNR thresholds, hangover, silence floor, check interval) and hybrid Web Speech endpointing.
+- Debug tools: Wake Word Debug panel with live VAD meters and a “Verbose VAD logs” toggle.
 - Direct calls to your n8n webhook with a Test/Prod toggle.
 - Callback polling via `/api/jarvis/callback/:id` with automatic retries and timeout.
 - Optional per‑user API key overrides for OpenAI and ElevenLabs from the Settings panel.
 	- ElevenLabs default voice is now `7dxS4V4NqL8xqL4PSiMp`. Users with their own ElevenLabs key can set a custom Voice ID in Settings and switch back anytime.
- - Token‑secured per‑user pushes from external systems (like n8n) to speak in the active session: `POST /api/integration/push-to-user` with `Authorization: Bearer <INTEGRATION_PUSH_TOKEN>`.
- - In call mode, the UI uses streaming TTS for low latency and queues messages; if streaming fails, it falls back to buffered TTS automatically.
+	- **NEW**: Voice presets - Choose from 14 curated ElevenLabs voices (Rachel, Antoni, Adam, etc.) or use custom voice IDs.
+- Three-tier TTS fallback system: ElevenLabs → eSpeak-NG → Web Speech API ensures audio always works.
+- Token‑secured per‑user pushes from external systems (like n8n) to speak in the active session: `POST /api/integration/push-to-user` with `Authorization: Bearer <INTEGRATION_PUSH_TOKEN>`.
+- In call mode, the UI uses streaming TTS for low latency and queues messages; if streaming fails, it falls back to buffered TTS automatically.
+
+## Study Tools & Learning Features
+
+- **Study Dashboard** (`/study`): Unified interface for creating and managing study content
+- **AI-Generated Study Materials**: Create study guides, flashcards, tests, and match games from any content
+- **Enhanced Study Guides**: Interactive guides with progress tracking, bookmarks, personal notes, and section navigation
+- **Smart Customization**: Control study duration (10-120min), difficulty level, learning style, and content inclusions
+- **Flashcard System**: Spaced repetition with SRS algorithm, study modes, and progress tracking
+- **Study Tools Integration**: Generate flashcards, tests, and match games directly from study guide headers
+- **Bidirectional Linking**: Seamless navigation between study guides and their generated materials
+- **Progress Persistence**: All study progress saved to database and synced across sessions
+- **Quick Presets**: Pre-configured templates for common study scenarios (quick review, exam prep, deep dive, etc.)
+
+Detailed documentation:
+- Study guide improvements: `docs/STUDY_GUIDE_IMPROVEMENTS.md`
+- Customization features: `docs/STUDY_GUIDE_CUSTOMIZATION.md`
 
 ## Quick start
 
@@ -38,6 +62,11 @@ Verify the webhook wiring
 
 See also: `docs/N8N.md` for detailed n8n HTTP Request node examples (push/push-voice/call-end and callback). During calls, you should see two TTS requests when sending a voice push alongside the webhook reply (one for each message).
 
+Always‑Listening, wake word, and VAD docs
+- Overview and how‑to: `docs/WAKE_WORD_ALWAYS_LISTENING.md`
+- Voice presets and TTS fallback: `docs/VOICE_PRESETS.md`
+ - Jarvis Notes: `docs/API.md#jarvis-notes-api`, `docs/SETTINGS.md#jarvis-notes-settings`, and the architecture section in `docs/ARCHITECTURE.md`.
+
 ## Production deployment
 
 - Target: Hostinger VPS (Ubuntu 24.04) + Cloudflare domain
@@ -48,6 +77,7 @@ Recommended path: Cloudflare Tunnel for zero‑downtime and no port conflicts wi
 Docs:
 - Step‑by‑step guide: `docs/DEPLOYMENT.md`
 - Environment reference: `docs/ENV.md`
+ - DB persistence & migrations: `docs/DB_PERSISTENCE.md`
 
 Quick commands (from the repo root on the VPS):
 
@@ -87,7 +117,7 @@ See more in `docs/DEPLOYMENT.md`.
 	- Username: `admin`
 	- Password: `changeme` (override with `ADMIN_DEFAULT_PASSWORD`)
 	- In production, the bootstrap default is also `changeme` unless you set `ADMIN_DEFAULT_PASSWORD`.
-	- This user is ensured automatically when `SEED_DB=true` (enabled in docker-compose). You can set `ADMIN_USERNAMES` to a comma‑separated list; default includes `admin`.
+	- Admin bootstrap can be seeded on start when `SEED_ON_START=true`. You can set `ADMIN_USERNAMES` to a comma‑separated list; default includes `admin`.
 	- If the user already exists, the seeder will set the role to admin, mark status active, and reset the password to the default.
 	- Password behavior: `ADMIN_SEED_MODE=ensure` (default) keeps existing passwords; set `ADMIN_SEED_MODE=reset` to force resetting to `ADMIN_DEFAULT_PASSWORD`.
 	- Change the password immediately in production.
@@ -131,7 +161,7 @@ The frontend dev server proxies `/api` to `http://localhost:8080`.
 ## Database
 
 - Prisma schema is in `backend/prisma/schema.prisma`.
-- At container start, the backend runs `prisma db push` and optional `prisma db seed` if `SEED_DB=true`.
+- At container start, the backend runs `prisma migrate deploy` and optional `prisma db seed` when `SEED_ON_START=true`.
 - Inspect DB with psql:
 
 	psql postgresql://postgres:postgres@localhost:5432/jarvis
