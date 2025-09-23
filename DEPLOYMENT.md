@@ -54,6 +54,7 @@ Notes
 - Ensure `ADMIN_SEED_MODE=ensure` for steady‑state (it won't reset passwords on future restarts).
 - Persistence: by default we use a stable named volume `jarvis_db_data`. To hard‑pin data to a host path, use the optional persist override below.
 - Prisma in production uses `prisma migrate deploy` automatically on container start. Do not use `db push` or `migrate reset` in prod.
+ - DATABASE_URL in our scripts defaults to `postgresql://jarvis:jarvis@db:5432/jarvis` to match compose.
 
 ## 2) Start the app without binding host ports
 
@@ -346,5 +347,27 @@ server {
 Then enable HTTPS (Let’s Encrypt) and set Cloudflare SSL/TLS to Full (strict), with a proxied DNS A record for the VPS.
 
 6) Verify as in step 7 above.
+
+---
+
+## Operations (reset & uninstall)
+
+Emergency DB reset (ERASES all data) and reinitialize:
+
+```
+cd /opt/jarvis
+./scripts/reset-db.sh --force
+# optional one-time admin seed after reset
+./scripts/reset-db.sh --admin-user admin --admin-password 'StrongPass123' --admin-reset once --force
+```
+
+Uninstall the entire stack (containers, volumes, images):
+
+```
+cd /opt/jarvis
+./scripts/uninstall.sh --force             # remove containers/volumes/images
+./scripts/uninstall.sh --force --purge     # also delete DB data (bind dir or named volume)
+./scripts/uninstall.sh --force --purge --nuke  # ALSO delete /opt/jarvis (danger)
+```
 
 If you need Traefik/Caddy equivalents, open an issue and we’ll add them.

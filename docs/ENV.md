@@ -35,7 +35,9 @@ Notes:
 - Users may override OpenAI/ElevenLabs keys client-side. The frontend will attach headers `x-openai-key` and `x-elevenlabs-key` to STT/TTS requests if present. When a custom ElevenLabs key is provided, the frontend will also send `x-elevenlabs-voice-id` if set in Settings; otherwise, the backend uses the default project voice.
 - To enable token-secured integration pushes (no admin session), set `INTEGRATION_PUSH_TOKEN` to a strong secret (or multiple, comma-separated). n8n or other systems call `/api/integration/push-to-user` with `Authorization: Bearer <token>`.
  - If you deploy via Cloudflare Tunnel, set `FRONTEND_ORIGIN=https://techexplore.us` and add `CLOUDFLARE_TUNNEL_TOKEN`.
+ - If `DB_DATA_DIR` is set in the environment or `.env`, the deploy/update scripts auto-include `docker-compose.persist.yml` for bind-mounted persistence.
 
 Migrations & persistence:
 - In production, the backend entrypoint runs `prisma migrate deploy` automatically on start. Avoid `prisma db push` or `prisma migrate reset` in prod.
 - Postgres data persists via a named volume by default (`db_data`, named as `${DB_VOLUME_NAME:-jarvis_db_data}`). For host path persistence, use `docker-compose.persist.yml` with `DB_DATA_DIR`.
+ - Admin operations: use `./scripts/reset-db.sh` to fully reset DB and reapply migrations, or `./scripts/uninstall.sh` to remove the entire stack.

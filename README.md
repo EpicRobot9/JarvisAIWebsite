@@ -78,6 +78,7 @@ Docs:
 - Step‑by‑step guide: `docs/DEPLOYMENT.md`
 - Environment reference: `docs/ENV.md`
  - DB persistence & migrations: `docs/DB_PERSISTENCE.md`
+ - Reset & uninstall commands: see "Operations" below
 
 Quick commands (from the repo root on the VPS):
 
@@ -109,6 +110,32 @@ docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml u
 ./scripts/update.sh --admin-user admin --admin-password 'Admin123!' --admin-reset once
 ```
 See more in `docs/DEPLOYMENT.md`.
+
+## Operations
+
+Common maintenance and recovery commands (server-side in the project directory, e.g., `/opt/jarvis`):
+
+- Rebuild images without cache, then start
+
+	docker compose build --no-cache && docker compose up -d
+
+- Fully reset the database (ERASES all data) and reapply migrations
+
+	./scripts/reset-db.sh --force
+
+	Options:
+	- `--admin-user <name>` `--admin-password <pass>` `--admin-reset once|always` to reseed admin after reset.
+	- Uses `DB_DATA_DIR` (bind mount) when set; otherwise removes the named volume (defaults to `jarvis_db_data`).
+
+- Uninstall the entire stack
+
+	./scripts/uninstall.sh --force            # remove containers/volumes/images for this project
+	./scripts/uninstall.sh --force --purge    # also delete DB data (bind dir or named volume)
+	./scripts/uninstall.sh --force --purge --nuke  # ALSO delete the whole install directory (danger)
+
+Notes:
+- In production, Postgres and frontend do not bind host ports (via `docker-compose.prod.yml`), so they won’t clash with other apps.
+- If using a bind mount for Postgres, set `DB_DATA_DIR=/opt/jarvis/db` in `.env` (the deploy/update scripts will auto-include `docker-compose.persist.yml`).
 
 ## Accounts
 
