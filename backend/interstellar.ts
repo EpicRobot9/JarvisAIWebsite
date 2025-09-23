@@ -245,51 +245,86 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
   const bodyTxt = await r.text().catch(()=>'')
       console.log('⚠️ Interstellar GET codespaces failed', { url: codespacesUrl, status: r.status, bodyPreview: bodyTxt?.slice?.(0, 500) })
 
-      // Fallback: some n8n setups expect a POST with JSON body for Sheets
+      // Fallback: many n8n setups expect a POST with an ARRAY payload for Sheets
       try {
-        console.log('🔁 Trying POST fallback for Sheets payload')
+        console.log('🔁 Trying POST fallback for Sheets payload (array form)')
         const r2 = await fetch(getUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ TypeOfInfo: 'Sheets' })
+          body: JSON.stringify([{ TypeOfInfo: 'Sheets' }])
         })
         if (r2.ok) {
           data = await r2.json()
-          console.log('✅ POST fallback succeeded, data:', JSON.stringify(data, null, 2))
+          console.log('✅ POST fallback (array) succeeded, data:', JSON.stringify(data, null, 2))
         } else {
-          const b2 = await r2.text().catch(()=>'')
-          console.log('⚠️ POST fallback failed', { url: getUrl, status: r2.status, bodyPreview: b2?.slice?.(0, 500) })
-          codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
-          data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+          const b2 = await r2.text().catch(()=>'' )
+          console.log('⚠️ POST fallback (array) failed', { url: getUrl, status: r2.status, bodyPreview: b2?.slice?.(0, 500) })
+          // Secondary attempt: some flows expect an object payload
+          try {
+            console.log('🔁 Trying POST fallback for Sheets payload (object form)')
+            const r3 = await fetch(getUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              body: JSON.stringify({ TypeOfInfo: 'Sheets' })
+            })
+            if (r3.ok) {
+              data = await r3.json()
+              console.log('✅ POST fallback (object) succeeded, data:', JSON.stringify(data, null, 2))
+            } else {
+              const b3 = await r3.text().catch(()=>'' )
+              console.log('⚠️ POST fallback (object) failed', { url: getUrl, status: r3.status, bodyPreview: b3?.slice?.(0, 500) })
+              codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+              data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+            }
+          } catch (e2) {
+            console.log('⚠️ POST fallback (object) error', e2)
+            codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+            data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+          }
         }
       } catch (e) {
-        console.log('⚠️ POST fallback error', e)
+        console.log('⚠️ POST fallback (array) error', e)
         codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
         data = { CurrentCodespaces: [], BackUpCodespaces: [] }
       }
     } else {
       data = await r.json()
       console.log('🎯 Raw data from n8n:', JSON.stringify(data, null, 2))
-      
+
+      // Unwrap common n8n formats: array of items and/or nested { json: {...} }
+      if (Array.isArray(data)) {
+        const first = data[0]
+        if (first && typeof first === 'object' && first.json && typeof first.json === 'object') {
+          console.log('🔧 Detected n8n array-of-json format, extracting first item.json')
+          data = first.json
+        } else if (first && typeof first === 'object' && (first.CurrentCodespaces || first.BackUpCodespaces)) {
+          console.log('🔧 Detected array with expected shape, using first element')
+          data = first
+        } else {
+          console.log('🔧 Unexpected array format, using fallback')
+          data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+        }
+      }
+
       // Ensure data has the required structure
       if (!data || typeof data !== 'object') {
         console.log('🔧 Invalid data structure, using fallback')
         data = { CurrentCodespaces: [], BackUpCodespaces: [] }
       } else {
-        // Handle n8n's nested JSON response format
-        if (data.json && typeof data.json === 'object') {
+        // Handle n8n's nested JSON response format on object
+        if ((data as any).json && typeof (data as any).json === 'object') {
           console.log('🔧 Detected n8n nested json format, extracting data')
-          data = data.json
+          data = (data as any).json
         }
-        
+
         // Ensure required arrays exist
-        if (!Array.isArray(data.CurrentCodespaces)) {
+        if (!Array.isArray((data as any).CurrentCodespaces)) {
           console.log('🔧 Missing or invalid CurrentCodespaces, initializing as empty array')
-          data.CurrentCodespaces = []
+          ;(data as any).CurrentCodespaces = []
         }
-        if (!Array.isArray(data.BackUpCodespaces)) {
+        if (!Array.isArray((data as any).BackUpCodespaces)) {
           console.log('🔧 Missing or invalid BackUpCodespaces, initializing as empty array')
-          data.BackUpCodespaces = []
+          ;(data as any).BackUpCodespaces = []
         }
       }
     }

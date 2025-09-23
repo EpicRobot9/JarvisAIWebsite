@@ -64,20 +64,3 @@ docker compose restart backend
 ```
 
 After this, the backend should start cleanly and log `Backend listening on :8080`.
-
-## Operations
-
-- Full DB reset (ERASES all data) and reapply migrations:
-
-```
-./scripts/reset-db.sh --force
-# optional: reseed admin
-./scripts/reset-db.sh --admin-user admin --admin-password 'StrongPass123' --admin-reset once --force
-```
-
-- Uninstall stack and optionally delete DB data:
-
-```
-./scripts/uninstall.sh --force
-./scripts/uninstall.sh --force --purge
-```
