@@ -224,26 +224,48 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
     let data: any = null
     let codespacesNote: string | null = null
     
-    // Add TypeOfInfo=Sheets to the GET URL for codespaces data
-    const codespacesUrl = `${getUrl}?TypeOfInfo=Sheets`
+    // Add TypeOfInfo=Sheets to the GET URL for codespaces data (robustly handle existing query params)
+    let codespacesUrl: string
+    try {
+      const u = new URL(getUrl)
+      u.searchParams.set('TypeOfInfo', 'Sheets')
+      codespacesUrl = u.toString()
+    } catch {
+      const sep = getUrl.includes('?') ? '&' : '?'
+      codespacesUrl = `${getUrl}${sep}TypeOfInfo=Sheets`
+    }
     console.log('🎯 GET URL for codespaces:', codespacesUrl)
     
   const r = await fetch(codespacesUrl, {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Accept': 'application/json' }
     })
     if (!r.ok) {
-      // Codespaces request failed, but we'll still try to get status
-      if (r.status === 404 || r.status === 500 || r.status === 502 || r.status === 503) {
-    const bodyTxt = await r.text().catch(()=>'')
-    console.log('⚠️ Interstellar GET codespaces failed', { url: codespacesUrl, status: r.status, bodyPreview: bodyTxt?.slice?.(0, 500) })
-    codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+      // Codespaces request failed, but we'll still try a compatibility fallback and/or return empty state
+  const bodyTxt = await r.text().catch(()=>'')
+      console.log('⚠️ Interstellar GET codespaces failed', { url: codespacesUrl, status: r.status, bodyPreview: bodyTxt?.slice?.(0, 500) })
+
+      // Fallback: some n8n setups expect a POST with JSON body for Sheets
+      try {
+        console.log('🔁 Trying POST fallback for Sheets payload')
+        const r2 = await fetch(getUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ TypeOfInfo: 'Sheets' })
+        })
+        if (r2.ok) {
+          data = await r2.json()
+          console.log('✅ POST fallback succeeded, data:', JSON.stringify(data, null, 2))
+        } else {
+          const b2 = await r2.text().catch(()=>'')
+          console.log('⚠️ POST fallback failed', { url: getUrl, status: r2.status, bodyPreview: b2?.slice?.(0, 500) })
+          codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+          data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+        }
+      } catch (e) {
+        console.log('⚠️ POST fallback error', e)
+        codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
         data = { CurrentCodespaces: [], BackUpCodespaces: [] }
-        console.log('🔧 Using fallback data due to webhook unavailable:', JSON.stringify(data, null, 2))
-      } else {
-    const bodyTxt = await r.text().catch(()=>'')
-    console.log('⚠️ Interstellar GET codespaces fetch_failed', { url: codespacesUrl, status: r.status, bodyPreview: bodyTxt?.slice?.(0, 500) })
-    return res.status(502).json({ error: 'fetch_failed', status: r.status })
       }
     } else {
       data = await r.json()
