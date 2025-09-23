@@ -6,6 +6,10 @@ import { PrismaClient } from '@prisma/client'
 import fetch from 'node-fetch'
 const prisma = new PrismaClient()
 
+// Simple in-memory cache of last successful codespaces payload per environment
+// Keyed by 'prod' | 'test'. Data is the already-enriched array response we send to the frontend.
+const codespacesCache = new Map<string, { data: any[]; at: number }>()
+
 const router = Router()
 
 // Get Interstellar webhook URLs (public read, admin write)
@@ -245,9 +249,9 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
   const bodyTxt = await r.text().catch(()=>'')
       console.log('⚠️ Interstellar GET codespaces failed', { url: codespacesUrl, status: r.status, bodyPreview: bodyTxt?.slice?.(0, 500) })
 
-      // Fallback: many n8n setups expect a POST with an ARRAY payload for Sheets
+      // Fallback: many n8n setups expect a POST with an ARRAY payload for Sheets to the GET URL
       try {
-        console.log('🔁 Trying POST fallback for Sheets payload (array form)')
+        console.log('🔁 Trying POST fallback for Sheets payload (array form) to GET URL')
         const r2 = await fetch(getUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -255,13 +259,13 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
         })
         if (r2.ok) {
           data = await r2.json()
-          console.log('✅ POST fallback (array) succeeded, data:', JSON.stringify(data, null, 2))
+          console.log('✅ POST fallback (array) to GET URL succeeded, data:', JSON.stringify(data, null, 2))
         } else {
           const b2 = await r2.text().catch(()=>'' )
-          console.log('⚠️ POST fallback (array) failed', { url: getUrl, status: r2.status, bodyPreview: b2?.slice?.(0, 500) })
+          console.log('⚠️ POST fallback (array) to GET URL failed', { url: getUrl, status: r2.status, bodyPreview: b2?.slice?.(0, 500) })
           // Secondary attempt: some flows expect an object payload
           try {
-            console.log('🔁 Trying POST fallback for Sheets payload (object form)')
+            console.log('🔁 Trying POST fallback for Sheets payload (object form) to GET URL')
             const r3 = await fetch(getUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -269,12 +273,54 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
             })
             if (r3.ok) {
               data = await r3.json()
-              console.log('✅ POST fallback (object) succeeded, data:', JSON.stringify(data, null, 2))
+              console.log('✅ POST fallback (object) to GET URL succeeded, data:', JSON.stringify(data, null, 2))
             } else {
               const b3 = await r3.text().catch(()=>'' )
-              console.log('⚠️ POST fallback (object) failed', { url: getUrl, status: r3.status, bodyPreview: b3?.slice?.(0, 500) })
-              codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
-              data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+              console.log('⚠️ POST fallback (object) to GET URL failed', { url: getUrl, status: r3.status, bodyPreview: b3?.slice?.(0, 500) })
+
+              // Tertiary attempt: try the configured POST webhook URL in case the flow is unified there
+              try {
+                const postUrlKey = (env === 'test') ? 'INTERSTELLAR_POST_URL_TEST' : 'INTERSTELLAR_POST_URL_PROD'
+                const postUrl = await getSettingValue(postUrlKey)
+                if (postUrl) {
+                  console.log('🔁 Trying POST fallback to POST URL (array form)')
+                  const r4 = await fetch(postUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify([{ TypeOfInfo: 'Sheets' }])
+                  })
+                  if (r4.ok) {
+                    data = await r4.json()
+                    console.log('✅ POST fallback to POST URL (array) succeeded, data:', JSON.stringify(data, null, 2))
+                  } else {
+                    const b4 = await r4.text().catch(()=>'' )
+                    console.log('⚠️ POST fallback to POST URL (array) failed', { url: postUrl, status: r4.status, bodyPreview: b4?.slice?.(0, 500) })
+                    console.log('🔁 Trying POST fallback to POST URL (object form)')
+                    const r5 = await fetch(postUrl, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                      body: JSON.stringify({ TypeOfInfo: 'Sheets' })
+                    })
+                    if (r5.ok) {
+                      data = await r5.json()
+                      console.log('✅ POST fallback to POST URL (object) succeeded, data:', JSON.stringify(data, null, 2))
+                    } else {
+                      const b5 = await r5.text().catch(()=>'' )
+                      console.log('⚠️ POST fallback to POST URL (object) failed', { url: postUrl, status: r5.status, bodyPreview: b5?.slice?.(0, 500) })
+                      // All attempts exhausted
+                      codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+                      data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+                    }
+                  }
+                } else {
+                  codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+                  data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+                }
+              } catch (e3) {
+                console.log('⚠️ POST fallback to POST URL error', e3)
+                codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+                data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+              }
             }
           } catch (e2) {
             console.log('⚠️ POST fallback (object) error', e2)
@@ -286,6 +332,23 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
         console.log('⚠️ POST fallback (array) error', e)
         codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
         data = { CurrentCodespaces: [], BackUpCodespaces: [] }
+      }
+
+      // If we still have an empty state and have a recent cache, return cached data
+      if (Array.isArray((data as any)?.CurrentCodespaces) && Array.isArray((data as any)?.BackUpCodespaces)) {
+        if ((data as any).CurrentCodespaces.length === 0 && (data as any).BackUpCodespaces.length === 0) {
+          const cached = codespacesCache.get(env === 'test' ? 'test' : 'prod')
+          const maxAgeMs = 10 * 60 * 1000 // 10 minutes
+          if (cached && Date.now() - cached.at < maxAgeMs) {
+            const ageMin = Math.round((Date.now() - cached.at) / 60000)
+            console.log('💾 Serving cached codespaces data (age min):', ageMin)
+            const cachedWithNote = cached.data.map(item => ({
+              ...item,
+              _note: `Using cached data (${ageMin} min old) due to upstream error.`
+            }))
+            return res.json(cachedWithNote)
+          }
+        }
       }
     } else {
       data = await r.json()
@@ -381,6 +444,11 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
     }))
     
     console.log('🎯 Final enriched data being sent to frontend:', JSON.stringify(enrichedData, null, 2))
+
+    // Save to cache for this environment
+    try {
+      codespacesCache.set(env === 'test' ? 'test' : 'prod', { data: enrichedData, at: Date.now() })
+    } catch {}
     
     return res.json(enrichedData)
   } catch (e) {
