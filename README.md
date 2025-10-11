@@ -117,6 +117,26 @@ docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml u
 ```
 See more in `docs/DEPLOYMENT.md`.
 
+Full wipe (dangerous; erases everything)
+
+If you need to completely remove Jarvis as if it was never installed — containers, images (best‑effort), database/data, and even the install directory — use the helper script:
+
+```
+# interactive: asks you to type NUKE
+./scripts/full-wipe.sh
+
+# non-interactive: no prompts
+./scripts/full-wipe.sh -y
+
+# with custom compose project name
+./scripts/full-wipe.sh -p techexplore -y
+```
+
+Notes
+- This runs `scripts/uninstall.sh` with `--purge --nuke` (and `--force` when you pass `-y`).
+- It will delete the entire repo directory (`DIR_ROOT`). Make sure you have backups if needed.
+- After wiping, re-clone or re-run the installer to bring the app back.
+
 ## Accounts
 
 - Sign up at `/signup`. If `REQUIRE_ADMIN_APPROVAL=true`, new users start as pending; an admin must approve (admin tools are in the Admin page of the app).

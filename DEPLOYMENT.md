@@ -281,6 +281,29 @@ docker compose -p techexplore logs -f cloudflared
 Backups:
 - `db_data` is a Docker volume. Periodically run `pg_dump` or snapshot the volume.
 
+### Full wipe (nuclear option)
+
+To completely remove the stack including data and the install directory (so it’s like it was never there), use the helper script from the repo root:
+
+```
+# interactive (will prompt for NUKE)
+./scripts/full-wipe.sh
+
+# non-interactive
+./scripts/full-wipe.sh -y
+
+# custom compose project name
+./scripts/full-wipe.sh -p techexplore -y
+```
+
+What it does
+- Stops and removes containers.
+- Removes associated images (best effort).
+- Purges database data (named volume or bind mount).
+- Deletes the entire install directory (`DIR_ROOT`).
+
+After wiping, you’ll need to re-clone or re-run the installer to deploy again.
+
 ## 9) Security hardening
 
 - Use strong `SESSION_SECRET` and `INTEGRATION_PUSH_TOKEN`.
