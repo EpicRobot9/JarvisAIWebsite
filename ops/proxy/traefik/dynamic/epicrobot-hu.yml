@@ -9,5 +9,13 @@ http:
   services:
     hu-svc:
       loadBalancer:
+        passHostHeader: true
+        serversTransport: long-timeouts
         servers:
           - url: "http://127.0.0.1:8082"
+
+serversTransports:
+  long-timeouts:
+    forwardingTimeouts:
+      dialTimeout: 10s
+      responseHeaderTimeout: 3600s

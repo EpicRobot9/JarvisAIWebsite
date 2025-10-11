@@ -1,11 +1,46 @@
 # epicrobot.zapto.org -> Holy‑Unblocker reverse proxy
 
-This repo doesn’t ship a host-level reverse proxy (no Traefik/Caddy/NPM in compose). The frontend uses an internal Nginx only inside its container. In production, ports 80/443 are typically owned by your existing proxy or by Cloudflare Tunnel. To publish Holy‑Unblocker at epicrobot.zapto.org without touching Jarvis, use the vhost template provided here.
+This repo doesn’t ship a host-level reverse proxy. In your environment, Traefik runs as a Docker container (Docker provider enabled) and owns ports 80/443. The correct integration for epicrobot.zapto.org is via Docker labels on the Holy‑Unblocker container—no host Nginx or Traefik file provider is required.
 
 Files added
 - `ops/proxy/nginx/epicrobot.zapto.org.conf` — Nginx server block with HTTP→HTTPS redirect (ACME path exempt) and an HTTPS block (commented) proxying to `http://127.0.0.1:8082`, websocket headers, timeouts, HSTS disabled by default.
+Files focus
+- Use Docker labels on the HU container so Traefik discovers the route and issues TLS automatically via ACME.
 
-How to apply (Nginx on host)
+How to apply (Traefik via Docker labels)
+1) Ensure Traefik is started with:
+    - `--providers.docker=true`
+    - `--providers.docker.exposedbydefault=false`
+    - `--entrypoints.web.address=:80` and redirect to websecure
+    - `--entrypoints.websecure.address=:443`
+    - ACME resolver `mytlschallenge` using TLS-ALPN-01 with storage `/letsencrypt/acme.json`
+
+2) Recreate Holy‑Unblocker with labels and attach to Traefik’s Docker network (keep any existing env/volume flags you use):
+
+```
+TRAEFIK_NAME=$(docker ps --format '{{.Names}}' | awk 'tolower($0) ~ /traefik/ {print $1; exit}'); \
+TRAEFIK_NET=$(docker inspect "$TRAEFIK_NAME" --format '{{range $k,$v := .NetworkSettings.Networks}}{{printf "%s" $k}}{{end}}'); \
+docker rm -f holy-unblocker >/dev/null 2>&1 || true; \
+docker pull quiteafancyemerald/holy-unblocker:latest; \
+docker run -d --name holy-unblocker --restart unless-stopped \
+   --network "$TRAEFIK_NET" \
+   -p 8082:8080 \
+   --label 'traefik.enable=true' \
+   --label 'traefik.http.routers.epicrobot.rule=Host(epicrobot.zapto.org)' \
+   --label 'traefik.http.routers.epicrobot.entrypoints=websecure' \
+   --label 'traefik.http.routers.epicrobot.tls=true' \
+   --label 'traefik.http.routers.epicrobot.tls.certresolver=mytlschallenge' \
+   --label 'traefik.http.services.epicrobot.loadbalancer.server.port=8080' \
+   quiteafancyemerald/holy-unblocker:latest
+```
+
+3) Verify ACME issuance and routing:
+```
+docker logs -f "$TRAEFIK_NAME" | grep -iE 'epicrobot|acme|certificate'
+curl -I http://epicrobot.zapto.org   # expect 308/301 to HTTPS
+curl -I https://epicrobot.zapto.org  # expect 200/301/302 with valid LE cert
+openssl s_client -servername epicrobot.zapto.org -connect epicrobot.zapto.org:443 </dev/null 2>/dev/null | openssl x509 -noout -issuer -subject -dates
+```
 1) Copy file to host and enable:
    - Ubuntu/Debian:
      - Copy to `/etc/nginx/sites-available/epicrobot.zapto.org.conf`
@@ -30,7 +65,7 @@ Notes
 
 ---
 
-## Fix self‑signed cert on epicrobot.zapto.org (Nginx)
+## Fix self‑signed cert on epicrobot.zapto.org (Traefik Docker provider)
 
 Context
 - Domain: `epicrobot.zapto.org`
@@ -38,23 +73,26 @@ Context
 - Current issue: HTTPS is serving a self‑signed certificate → browsers/curl fail
 - Goal: Issue a valid Let’s Encrypt certificate, keep other routes untouched, enable auto‑renew
 
-Detected stack: host‑level Nginx (this repo does not run Traefik/Caddy/NPM). The steps below are surgical and only change the vhost for `epicrobot.zapto.org`.
+Detected stack: Traefik running as a Docker container with the Docker provider. Use container labels to define the router/service and ACME resolver `mytlschallenge`. No host Nginx or file provider is needed.
 
-1) Install the vhost file (HTTP + redirect, ACME path exempt)
+1) Recreate Holy‑Unblocker with the labels shown in the “How to apply” section above. Traefik’s Docker provider will discover it and request a certificate via `mytlschallenge`.
 
-Copy `ops/proxy/nginx/epicrobot.zapto.org.conf` to your host and enable it:
-- `/etc/nginx/sites-available/epicrobot.zapto.org.conf`
-- `sudo ln -s /etc/nginx/sites-available/epicrobot.zapto.org.conf /etc/nginx/sites-enabled/`
+2) Verify runtime and TLS chain:
+```bash
+curl -I http://epicrobot.zapto.org
+curl -I https://epicrobot.zapto.org
+openssl s_client -servername epicrobot.zapto.org -connect epicrobot.zapto.org:443 </dev/null 2>/dev/null | openssl x509 -noout -issuer -subject -dates
+```
 
 The file includes:
 - HTTP: serves `/.well-known/acme-challenge/` for HTTP‑01; all other requests redirect to HTTPS.
 - HTTPS block is present but commented. After cert issuance it will proxy to `127.0.0.1:8082` with WebSocket headers and long timeouts.
 
-2) Test and reload Nginx
-```bash
-sudo nginx -t
-sudo systemctl reload nginx
-```
+Acceptance
+- HTTP returns 308/301 to HTTPS (common global redirect)
+- HTTPS succeeds with a valid Let’s Encrypt chain
+- Browser loads https://epicrobot.zapto.org and proxies to Holy‑Unblocker on port 8080 inside the container
+- Other domains/routes remain unchanged
 
 3) Issue a Let’s Encrypt certificate (HTTP‑01)
 ```bash
@@ -117,6 +155,71 @@ Acceptance
 - Other domains/routes remain unchanged
 
 If you are using Traefik/Caddy/NPM instead of host Nginx, see the earlier sections for their equivalents. For DNS‑01, configure the appropriate ACME DNS provider in your proxy, then issue the certificate for `epicrobot.zapto.org`.
+
+---
+
+## Traefik: replace default self‑signed cert with Let’s Encrypt
+
+Symptoms
+- `curl -I https://epicrobot.zapto.org` fails with `SSL certificate problem: self-signed certificate`
+- `openssl s_client ... | openssl x509 -noout -issuer` shows `TRAEFIK DEFAULT CERT`
+
+Fix
+1) Create a dynamic file with a router/service for the domain.
+    - Example (see `ops/proxy/traefik/dynamic/epicrobot-hu.yml`):
+```
+http:
+   routers:
+      epicrobot-hu:
+         rule: Host(`epicrobot.zapto.org`)
+         entryPoints: ["websecure"]
+         service: hu-svc
+         tls:
+            certResolver: letsencrypt  # set to your resolver name in traefik.yml
+   services:
+      hu-svc:
+         loadBalancer:
+            passHostHeader: true
+            serversTransport: long-timeouts
+            servers:
+               - url: "http://127.0.0.1:8082"
+
+serversTransports:
+   long-timeouts:
+      forwardingTimeouts:
+         dialTimeout: 10s
+         responseHeaderTimeout: 3600s
+```
+
+2) Ensure your static Traefik config (e.g., `/etc/traefik/traefik.yml`) declares:
+```
+entryPoints:
+   web:
+      address: ":80"
+   websecure:
+      address: ":443"
+
+certificatesResolvers:
+   letsencrypt:
+      acme:
+         email: admin@epicrobot.zapto.org
+         storage: /var/lib/traefik/acme.json
+         httpChallenge:
+            entryPoint: web
+```
+
+3) Reload Traefik and verify issuance (watch logs for ACME).
+
+Verification
+```bash
+curl -I http://epicrobot.zapto.org
+curl -I https://epicrobot.zapto.org
+openssl s_client -servername epicrobot.zapto.org -connect epicrobot.zapto.org:443 </dev/null 2>/dev/null | openssl x509 -noout -issuer -subject -dates
+```
+
+Notes
+- If behind Cloudflare orange cloud and HTTP‑01 fails, either disable proxy during issuance or switch to DNS‑01 in the `certificatesResolvers` config.
+- Keep the upstream at `127.0.0.1:8082`. The router only changes TLS termination and routing.
 
 ## Add other websites/domains (general patterns)
 
