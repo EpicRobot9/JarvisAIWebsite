@@ -1,33 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AppError, sendToWebhook, synthesizeTTS, transcribeAudio, getTtsStreamUrl } from '../lib/api'
-import { stopAudio, playStreamUrl, enqueueStreamUrl, setOnQueueIdleListener } from '../lib/audio'
+import { stopAudio, playStreamUrl, enqueueStreamUrl, setOnQueueIdleListener, primeAudio, playPresetChime } from '../lib/audio'
 import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '../lib/config'
+import { useResolvedWebhookUrls } from './useWebhookUrls'
+import { parseVoiceMacro } from '../lib/commands'
+import { storage } from '../lib/storage'
 
 export type CallState = 'idle' | 'listening' | 'processing' | 'speaking'
 
-export function useCallSession(opts: { userId: string | undefined; sessionId: string; useTestWebhook?: boolean; onTranscript?: (t: string)=>void; onReply?: (t: string)=>void; setStatus?: (s: string)=>void }) {
-  const [urls, setUrls] = useState<{ prod: string; test: string }>({ prod: '', test: '' })
-  const currentWebhookUrl = opts.useTestWebhook ? (urls.test || TEST_WEBHOOK_URL) : (urls.prod || PROD_WEBHOOK_URL)
-  useEffect(()=>{
-    (async()=>{
-      try {
-        const cached = {
-          prod: localStorage.getItem('jarvis_webhook_prod') || '',
-          test: localStorage.getItem('jarvis_webhook_test') || ''
-        }
-        if (cached.prod || cached.test) setUrls(cached)
-        const r = await fetch('/api/webhook-urls', { cache: 'no-store' }).catch(()=>null)
-        if (r?.ok) {
-          const data = await r.json()
-          setUrls({ prod: data.prod || '', test: data.test || '' })
-          try {
-            localStorage.setItem('jarvis_webhook_prod', data.prod || '')
-            localStorage.setItem('jarvis_webhook_test', data.test || '')
-          } catch {}
-        }
-      } catch {}
-    })()
-  }, [])
+export function useCallSession(opts: { userId: string | undefined; sessionId: string; useTestWebhook?: boolean; onTranscript?: (t: string)=>void; onReply?: (t: string)=>void; setStatus?: (s: string)=>void; customProcess?: (text: string) => Promise<string | void> }) {
+  const { currentWebhookUrl } = useResolvedWebhookUrls(!!opts.useTestWebhook)
   const [state, setState] = useState<CallState>('idle')
   const [error, setError] = useState<AppError | null>(null)
   const mediaRef = useRef<MediaStream | null>(null)
@@ -38,6 +20,30 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
   const restartBackoffRef = useRef<number>(0)
   const resumeGuardRef = useRef<boolean>(false)
   const wakeLockRef = useRef<any>(null)
+  const preferredInputIdRef = useRef<string | null>(null)
+  // PTT behavior + chime (reads from Settings via localStorage)
+  const pttModeRef = useRef<'hold' | 'toggle'>('hold')
+  const pttChimeEnabledRef = useRef<boolean>(false)
+  const chimePresetRef = useRef<string>('ding')
+  const chimeVolumeRef = useRef<number>(0.2)
+  const lastReplyRef = useRef<string>('')
+  useEffect(() => {
+    try { preferredInputIdRef.current = localStorage.getItem('ux_audio_input_device_id') } catch { preferredInputIdRef.current = null }
+    // Read PTT + chime settings
+    const readPrefs = () => {
+      try { pttModeRef.current = (localStorage.getItem('ux_ptt_mode') as any) || 'hold' } catch {}
+      try { pttChimeEnabledRef.current = JSON.parse(localStorage.getItem('ux_ptt_chime_enabled') || 'false') } catch {}
+      try { chimePresetRef.current = localStorage.getItem('ux_wake_chime_preset') || 'ding' } catch {}
+      try { chimeVolumeRef.current = Number(localStorage.getItem('ux_wake_chime_volume') || '0.2') } catch {}
+    }
+    readPrefs()
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key) return
+      if (e.key.startsWith('ux_ptt_') || e.key.startsWith('ux_wake_chime_')) readPrefs()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   useEffect(()=>()=>cleanup(), [])
 
@@ -70,7 +76,25 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
   const startListening = useCallback(async ()=>{
     if (state === 'listening') return
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 48000 } })
+      // Barge-in: cut any TTS as soon as user starts talking
+      try { await stopAudio() } catch {}
+      // Ensure AudioContext is primed to reduce first-utterance latency
+      try { await primeAudio() } catch {}
+      // Optional PTT start chime – play before mic starts to avoid recording the chime
+      try {
+        if (pttChimeEnabledRef.current) {
+          await playPresetChime((chimePresetRef.current as any) || 'ding', Math.max(0, Math.min(1, Number(chimeVolumeRef.current) || 0.2)))
+        }
+      } catch {}
+      const base: MediaStreamConstraints = { audio: { channelCount: 1, noiseSuppression: true, echoCancellation: true, autoGainControl: true, sampleRate: 48000 } as any }
+      const withDevice: MediaStreamConstraints = preferredInputIdRef.current ? { audio: { ...(base.audio as any), deviceId: preferredInputIdRef.current } } : base
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(withDevice)
+      } catch {
+        // Safari/iOS or strict constraint failure fallback
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      }
       mediaRef.current = stream
       chunksRef.current = []
       const rec = new MediaRecorder(stream)
@@ -111,21 +135,73 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
     if (state !== 'listening') return
     shouldBeListeningRef.current = false
     const blob = await stopRecorderAndGetBlob()
+    // Optional PTT stop chime – mic is stopped now, so it won't be recorded
+    try {
+      if (pttChimeEnabledRef.current) {
+        await playPresetChime((chimePresetRef.current as any) || 'ding', Math.max(0, Math.min(1, Number(chimeVolumeRef.current) || 0.2)))
+      }
+    } catch {}
     cleanup()
     releaseWakeLock()
     setState('processing')
     try {
       const { text } = await transcribeAudio(blob)
+      // Voice macros: handle locally before contacting webhook
+      const macro = parseVoiceMacro(text)
+      if (macro) {
+        if (macro.type === 'repeat') {
+          const last = (lastReplyRef.current || '').trim()
+          if (last) {
+            setState('speaking')
+            setOnQueueIdleListener(() => setState('idle'))
+            await enqueueStreamUrl(getTtsStreamUrl(last))
+          } else {
+            setState('idle')
+          }
+          return
+        }
+        if (macro.type === 'bookmark') {
+          const arr = storage.get('jarvis_bookmarks_v1', []) as Array<{ id: string; at: number; label?: string; transcript?: string }>
+          arr.push({ id: crypto.randomUUID(), at: Date.now(), label: macro.label || 'Bookmark', transcript: lastReplyRef.current || undefined })
+          storage.set('jarvis_bookmarks_v1', arr)
+          setState('idle')
+          return
+        }
+      }
       opts.onTranscript?.(text)
-  const { correlationId, immediateText } = await sendToWebhook(text, {
+      // If a custom processor is provided, bypass webhook and let the feature handle the reply
+      if (opts.customProcess) {
+        let reply = ''
+        try { reply = (await opts.customProcess(text)) || '' } catch {}
+        if (reply && reply.trim()) {
+          opts.onReply?.(reply)
+          setState('speaking')
+          setOnQueueIdleListener(() => setState('idle'))
+          await enqueueStreamUrl(getTtsStreamUrl(reply))
+          lastReplyRef.current = reply
+        } else {
+          setState('idle')
+        }
+        return
+      }
+      const { correlationId, immediateText } = await sendToWebhook(text, {
         userId: opts.userId || 'anon',
         webhookUrl: currentWebhookUrl,
         callbackUrl: CALLBACK_URL,
         source: SOURCE_NAME,
-  sessionId: opts.sessionId,
-  messageType: 'CallMessage'
+        sessionId: opts.sessionId,
+        messageType: 'CallMessage'
       })
       let reply = immediateText || ''
+      // If we received an immediateText, start speaking right away while we poll callback
+      if (reply && reply.trim()) {
+        try {
+          setState('speaking')
+          setOnQueueIdleListener(() => setState('idle'))
+          await enqueueStreamUrl(getTtsStreamUrl(reply))
+          lastReplyRef.current = reply
+        } catch {/* non-fatal; we'll still poll */}
+      }
       if (!reply) {
         const start = Date.now()
         const timeoutMs = 30000
@@ -147,11 +223,17 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
           await new Promise(r=>setTimeout(r, 1200))
         }
       }
-  opts.onReply?.(reply)
-  // Queue the audio so multiple replies play sequentially
-  setState('speaking')
-  setOnQueueIdleListener(() => setState('idle'))
-  await enqueueStreamUrl(getTtsStreamUrl(reply))
+      // If we didn't have immediateText and just resolved, speak now
+      if (reply && reply.trim()) {
+        opts.onReply?.(reply)
+        // Queue the audio so multiple replies play sequentially
+        setState('speaking')
+        setOnQueueIdleListener(() => setState('idle'))
+        await enqueueStreamUrl(getTtsStreamUrl(reply))
+        lastReplyRef.current = reply
+      } else {
+        setState('idle')
+      }
     } catch (e) {
       setError(AppError.from(e))
       setState('idle')
@@ -168,16 +250,30 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
 
   // Space PTT
   useEffect(()=>{
+    // Respect settings toggle for Spacebar PTT
+    let enabled = true
+    try { enabled = JSON.parse(localStorage.getItem('ux_space_ptt_enabled') || 'true') } catch {}
+    if (!enabled) return
     const down = (e: KeyboardEvent)=>{
       if (e.code !== 'Space') return
       if ((e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'TEXTAREA') return
-      if (keyHoldRef.current) return
-      keyHoldRef.current = true
-      e.preventDefault()
-      startListening()
+      const mode = pttModeRef.current
+      if (mode === 'hold') {
+        if (keyHoldRef.current) return
+        keyHoldRef.current = true
+        e.preventDefault()
+        startListening()
+      } else {
+        // toggle mode – act on keydown (ignore repeats)
+        if ((e as any).repeat) return
+        e.preventDefault()
+        if (state !== 'listening') startListening()
+        else stopAndSend()
+      }
     }
     const up = (e: KeyboardEvent)=>{
       if (e.code !== 'Space') return
+      if (pttModeRef.current !== 'hold') return
       if (!keyHoldRef.current) return
       keyHoldRef.current = false
       e.preventDefault()

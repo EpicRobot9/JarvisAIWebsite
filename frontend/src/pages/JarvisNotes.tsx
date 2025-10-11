@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import Markdown from '../components/ui/Markdown'
 import { AppError, summarizeTranscript, createNote, listNotes, deleteNote, clearNotes, updateNote, type NoteItem, getNotesSettings, type NotesPrefs } from '../lib/api'
+import { summarizeChunked } from '../lib/summarizeChunked'
 
 // Lightweight recorder using Web Speech for interim transcript + MediaRecorder for final high quality blob if we want to extend later.
 // For this MVP, we use Web Speech interim results to fill the left transcript panel live.
@@ -21,6 +22,7 @@ export default function JarvisNotes() {
   const [currentNoteId, setCurrentNoteId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [summarizing, setSummarizing] = useState<boolean>(false)
+  const [sumProgress, setSumProgress] = useState<{ phase: 'chunk' | 'merge' | 'done'; index?: number; total?: number } | null>(null)
   const [panelOpen, setPanelOpen] = useState(true)
   const [historyOpen, setHistoryOpen] = useState(true)
   type NoteEntry = { id: string; at: number; transcript: string; notes: string }
@@ -293,10 +295,24 @@ export default function JarvisNotes() {
     if (autoSummarize) {
       setSummarizing(true)
       try {
-        const { notes } = await summarizeTranscript(text)
-        setNotes(notes || '')
+        const prefs = await getNotesSettings().catch(()=>null) as NotesPrefs | null
+        let out = ''
+        if (text.length > 3000) {
+          out = await summarizeChunked(text, prefs || undefined, { onProgress: setSumProgress })
+        } else {
+          const r = await summarizeTranscript(text, prefs || undefined)
+          out = r.notes || ''
+        }
+        setSumProgress(null)
+        setNotes(out || '')
+        // Suggest a title if empty: first heading in notes or first 60 chars of transcript
+        if (!title || !title.trim()) {
+          const firstH = (out.split('\n').find(l => /^#{1,6}\s+/.test(l)) || '').replace(/^#{1,6}\s+/, '').trim()
+          const suggested = firstH || (text.slice(0, 60) || 'Untitled')
+          setTitle(suggested)
+        }
         // Save locally and server-side
-        await saveNote(text, notes || '')
+        await saveNote(text, out || '')
       } catch (e) {
         const err = e as any
         setError(err?.message || 'Failed to summarize')
@@ -461,6 +477,12 @@ export default function JarvisNotes() {
             title="Create a new note"
           >New Note</button>
           <span className="text-slate-400 text-sm">Jarvis Notes</span>
+          {sumProgress && (
+            <span className="text-xs text-emerald-300">
+              {sumProgress.phase === 'chunk' && sumProgress.total ? `Summarizing ${sumProgress.index}/${sumProgress.total}` :
+               sumProgress.phase === 'merge' ? 'Merging…' : 'Finishing…'}
+            </span>
+          )}
           <input
             ref={titleInputRef}
             value={title}

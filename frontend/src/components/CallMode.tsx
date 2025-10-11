@@ -6,6 +6,7 @@ import { EFFECTS } from './effects'
 import { storage } from '../lib/storage'
 import { setAudioLevelListener } from '../lib/audio'
 import { useCallSession } from '../hooks/useCallSession'
+import { useStreamingCall } from '../hooks/useStreamingCall'
 
 export default function CallMode({ userId, sessionId, useTestWebhook, onEnd, onTranscript, onReply }: {
   userId?: string,
@@ -25,6 +26,30 @@ export default function CallMode({ userId, sessionId, useTestWebhook, onEnd, onT
     return (Object.keys(EFFECTS) as Array<keyof typeof EFFECTS>).includes(v) ? (v as keyof typeof EFFECTS) : 'Lotus Bloom'
   })
   // Background mic reactivity disabled per request; rely on PTT only
+  const [streamingEnabled, setStreamingEnabled] = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem('ux_streaming_mode') || 'false') } catch { return false }
+  })
+  const { state: streamState, partials: streamPartials, finals: streamFinals, connect: streamConnect, disconnect: streamDisconnect, sendText: streamSend } = useStreamingCall()
+  const [streamInput, setStreamInput] = useState('')
+
+  // Keep streaming flag in sync if user toggles settings while call is open
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'ux_streaming_mode' && e.newValue != null) {
+        try { setStreamingEnabled(JSON.parse(e.newValue)) } catch {}
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  // Auto-connect streaming channel when enabled
+  useEffect(() => {
+    if (streamingEnabled) {
+      streamConnect()
+      return () => { try { streamDisconnect() } catch {} }
+    }
+  }, [streamingEnabled])
 
   useEffect(() => { storage.set(`jarvis_fx_effect:${uid}`, fx) }, [fx, uid])
   // If user changes mid-session, reload their prefs
@@ -105,10 +130,42 @@ export default function CallMode({ userId, sessionId, useTestWebhook, onEnd, onT
             hue={effectHue[fx]?.hue ?? 195}
             altHue={effectHue[fx]?.altHue}
           />
+          {streamingEnabled && (
+            <div className="mt-3 px-2 py-1 text-[11px] rounded-full bg-emerald-900/40 ring-1 ring-emerald-400/30 text-emerald-200">
+              Streaming {streamState === 'connected' ? '●' : streamState === 'connecting' ? '…' : '○'}
+            </div>
+          )}
           <div className="mt-12 flex items-center gap-3">
             <button className="jarvis-btn" onClick={()=>startListening()} disabled={state==='listening'}>PTT</button>
             <button className="jarvis-btn jarvis-btn-primary" onClick={async()=>{ await stopAll(); onEnd() }}>End Call</button>
           </div>
+          {streamingEnabled && (
+            <div className="mt-6 w-full max-w-xl mx-auto">
+              <div className="text-xs text-slate-300 mb-1">Streaming test</div>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 rounded bg-slate-800/70 ring-1 ring-white/10 px-3 py-2 text-sm outline-none"
+                  placeholder={streamState==='connected' ? 'Type text to stream…' : 'Connecting…'}
+                  value={streamInput}
+                  onChange={(e)=>setStreamInput(e.target.value)}
+                  disabled={streamState!=='connected'}
+                />
+                <button
+                  className="jarvis-btn"
+                  disabled={streamState!=='connected' || !streamInput.trim()}
+                  onClick={()=>{ if (streamInput.trim()) { streamSend(streamInput.trim()); setStreamInput('') } }}
+                >Send</button>
+              </div>
+              {(streamPartials || (streamFinals && streamFinals.length)) && (
+                <div className="mt-3 rounded-lg bg-slate-900/60 ring-1 ring-white/10 p-3 text-left text-sm text-slate-200 max-h-40 overflow-auto">
+                  {streamFinals.map((t, i) => (
+                    <div key={i} className="mb-1"><span className="text-emerald-300">Final:</span> {t}</div>
+                  ))}
+                  {streamPartials && (<div className="opacity-80"><span className="text-cyan-300">Partial:</span> {streamPartials}</div>)}
+                </div>
+              )}
+            </div>
+          )}
           {error && (
             <div className="mt-3 text-sm text-red-300">{error.message} <button className="ml-2 underline" onClick={()=>resetError()}>Retry</button></div>
           )}

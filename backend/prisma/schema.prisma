@@ -23,6 +23,9 @@ model User {
   logs         ApiLog[]
   notes        Note[]
   studySets    StudySet[]
+  roleplayScenarios RoleplayScenario[]
+  roleplaySessions  RoleplaySession[]
+  studyProgress     StudyProgress[]
 }
 
 model Session {
@@ -129,6 +132,80 @@ model StudySet {
   content      Json     // { guide?: string, flashcards?: Flashcard[], test?: Question[], match?: Pair[] }
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  progressRecords StudyProgress[]
+  /// Optional link back to the source study guide if this set was generated from another set's guide
+  sourceGuideId String?
+  sourceGuide   StudySet? @relation("StudySetSourceGuide", fields: [sourceGuideId], references: [id])
+  derivedSets   StudySet[] @relation("StudySetSourceGuide")
 
   @@index([userId, createdAt])
+  @@index([sourceGuideId])
+}
+
+/// Per-user progress tracking for study guides
+model StudyProgress {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  studySetId      String
+  studySet        StudySet @relation(fields: [studySetId], references: [id])
+  sectionsCompleted String[] @default([])
+  timeSpent       Int      @default(0) // minutes accumulated (future use)
+  lastStudied     DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  bookmarks       String[] @default([])
+
+  @@unique([userId, studySetId])
+  @@index([studySetId])
+}
+
+/// User-defined Roleplay scenarios and saved sessions
+model RoleplayScenario {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  title       String
+  description String
+  system      String   // system prompt
+  rubric      String?  // optional rubric
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessions    RoleplaySession[]
+
+  @@index([userId, createdAt])
+}
+
+model RoleplaySession {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  scenarioId   String
+  scenario     RoleplayScenario @relation(fields: [scenarioId], references: [id])
+  messages     Json     // [{ role, content, at }]
+  feedback     Json?    // { summary, scores }
+  score        Float?   // optional aggregate score
+  savedSetId   String?  // if exported to StudySet
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([scenarioId, createdAt])
+}
+
+/// Quiz summaries (post-game) persisted for later viewing
+model QuizSummary {
+  id               String   @id @default(cuid())
+  roomId           String
+  setId            String
+  mode             String
+  hostId           String?
+  hostName         String?
+  options          Json     // { questionTime, royaleLives, goldStealChance }
+  finalLeaderboard Json     // [{ id, name, score, gold?, lives?, eliminated? }]
+  rounds           Json     // [{ index, question, choices, correctIndex, counts, steals?, eliminated? }]
+  createdAt        DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([setId, createdAt])
 }

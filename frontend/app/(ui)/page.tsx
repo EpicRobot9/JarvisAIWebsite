@@ -77,7 +77,7 @@ export default function Page() {
     return ()=>{ window.removeEventListener('storage', onStorage); clearInterval(i) }
   }, [])
 
-  // Fetch dynamic webhook URLs
+            {/* Quiz navigation moved inside the sidebar later in the component */}
   useEffect(() => {
     ;(async () => {
       try {
@@ -439,7 +439,9 @@ export default function Page() {
         <div className="mt-4 space-y-2">
           <button
             className="w-full jarvis-btn jarvis-btn-primary"
-            onClick={()=>{
+            onClick={async()=>{
+              // Ensure AudioContext is unlocked to avoid initial TTS delay
+              try { const mod = await import('../../src/lib/audio'); await mod.primeAudio(); await mod.stopAudio() } catch {}
               // Save UI context for restore
               const active = document.activeElement as HTMLElement | null
               ;(window as any).__jarvis_restore_focus = active && active.focus ? active : null
@@ -463,6 +465,16 @@ export default function Page() {
             className="w-full inline-block jarvis-btn text-center"
             title="Open Study Dashboard"
           >Study Dashboard</Link>
+          <Link
+            to="/quiz/join"
+            className="w-full inline-block jarvis-btn text-center"
+            title="Join Live Quiz"
+          >Live Quiz</Link>
+          <Link
+            to="/quiz/past"
+            className="w-full inline-block jarvis-btn text-center"
+            title="View Past Games"
+          >Past Games</Link>
           <div className="flex items-center gap-2 text-xs">
             <span>Webhook:</span>
             <button className={`px-2 py-1 rounded border ${!useTestWebhook?'bg-blue-600 text-white':'border-cyan-200/20'}`} onClick={()=>setUseTestWebhook(false)}>Prod</button>
@@ -608,6 +620,18 @@ export default function Page() {
         {retry && (
           <button className="px-3 py-2 rounded-xl border border-cyan-200/20" onClick={()=>retry.fn()}>{retry.label}</button>
         )}
+        <div className="pt-3 border-t">
+          <h4 className="text-cyan-300 font-semibold mb-2">Explore Features</h4>
+          <div className="grid grid-cols-1 gap-2 text-sm">
+            <Link to="/graph" className="px-3 py-2 rounded-xl border border-cyan-200/20">Knowledge Graph</Link>
+            <Link to="/shared" className="px-3 py-2 rounded-xl border border-cyan-200/20">Shared Study Sets</Link>
+            <Link to="/roleplay" className="px-3 py-2 rounded-xl border border-cyan-200/20">Role-play Simulator</Link>
+            <Link to="/lecture" className="px-3 py-2 rounded-xl border border-cyan-200/20">Lecture Recorder</Link>
+            <Link to="/import" className="px-3 py-2 rounded-xl border border-cyan-200/20">Import URL/PDF</Link>
+            <Link to="/bookmarks" className="px-3 py-2 rounded-xl border border-cyan-200/20">Bookmarks & Macros</Link>
+            <Link to="/quiz/join" className="px-3 py-2 rounded-xl border border-cyan-200/20">Join a Live Quiz</Link>
+          </div>
+        </div>
         <div className="pt-2 border-t text-xs text-slate-500">
           Session: {session.sessionId.slice(0,8)}…
         </div>

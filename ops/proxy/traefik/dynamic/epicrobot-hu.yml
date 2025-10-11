@@ -1,0 +1,13 @@
+http:
+  routers:
+    epicrobot-hu:
+      rule: Host(`epicrobot.zapto.org`)
+      entryPoints: ["websecure"]
+      service: hu-svc
+      tls:
+        certResolver: letsencrypt # change to your resolver name
+  services:
+    hu-svc:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8082"

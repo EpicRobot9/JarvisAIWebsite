@@ -17,6 +17,31 @@ type QueueTask = () => Promise<void>
 const playbackQueue: Array<() => Promise<void>> = []
 let processingQueue = false
 let onQueueIdle: (() => void) | null = null
+// Preferred output device (HTMLMediaElement.setSinkId)
+function getSavedOutputDeviceId(): string {
+  try { return localStorage.getItem('ux_audio_output_device_id') || '' } catch { return '' }
+}
+async function applyOutputDevice(el: HTMLAudioElement): Promise<void> {
+  try {
+    const id = getSavedOutputDeviceId()
+    if (!id) return
+    const anyEl: any = el as any
+    if (typeof anyEl.setSinkId === 'function') {
+      try { await anyEl.setSinkId(id) } catch (e) { console.warn('[Audio] setSinkId failed:', e) }
+    }
+  } catch {}
+}
+export async function setPreferredOutputDevice(deviceId: string) {
+  try {
+    if (deviceId) localStorage.setItem('ux_audio_output_device_id', deviceId)
+    else localStorage.removeItem('ux_audio_output_device_id')
+  } catch {}
+  // Try to apply to current element if any
+  try { if (currentMediaEl) await applyOutputDevice(currentMediaEl) } catch {}
+}
+export function getPreferredOutputDevice(): string {
+  return getSavedOutputDeviceId()
+}
 
 async function runQueue() {
   if (processingQueue) return
@@ -277,6 +302,8 @@ export async function playStreamUrl(url: string): Promise<void> {
   audio.src = url
   audio.preload = 'auto'
   audio.crossOrigin = 'use-credentials'
+  // Apply preferred output device if supported
+  try { await applyOutputDevice(audio) } catch {}
   // Connect to analyser for level visualization
   const analyser = ctx.createAnalyser()
   analyser.fftSize = 256

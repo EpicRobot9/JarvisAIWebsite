@@ -1,0 +1,1 @@
+ALTER TABLE "StudyProgress" ADD COLUMN IF NOT EXISTS "bookmarks" TEXT[] DEFAULT ARRAY[]::TEXT[];

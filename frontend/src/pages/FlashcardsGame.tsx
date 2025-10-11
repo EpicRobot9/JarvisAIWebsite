@@ -22,6 +22,15 @@ export default function FlashcardsGame() {
 
   const cards: Flashcard[] = useMemo(() => setData?.content?.flashcards || [], [setData])
   const current = cards[idx]
+  // Check if these flashcards were created from a study guide
+  const linkedStudyGuideId = useMemo(() => {
+    try {
+      const links = JSON.parse(localStorage.getItem('flashcard-study-links') || '{}')
+      return links[id as string] || null
+    } catch {
+      return null
+    }
+  }, [id])
 
   function resetTimer() {
     setTimeLeft(timeLimit)
@@ -68,8 +77,17 @@ export default function FlashcardsGame() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="p-4 border-b border-slate-800 flex items-center gap-3">
-        <Link to={`/study/sets/${id}`} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
+        <Link to={`/study/sets/${id}/enhanced`} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
         <div className="font-medium">Flashcards Game</div>
+        {linkedStudyGuideId && (
+          <Link 
+            to={`/study/sets/${linkedStudyGuideId}/enhanced`} 
+            className="px-3 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm"
+            title="View source study guide"
+          >
+            📚 Study Guide
+          </Link>
+        )}
         <div className="ml-auto flex items-center gap-2 text-sm text-slate-300">
           <label className="flex items-center gap-2"><span>Time limit</span>
             <input type="number" min={5} max={120} value={timeLimit} onChange={e => { const v = Math.max(5, Math.min(120, Number(e.target.value)||20)); setTimeLimit(v); setTimeLeft(v) }} className="w-20 bg-slate-900/60 border border-slate-800 rounded px-2 py-1 outline-none" />

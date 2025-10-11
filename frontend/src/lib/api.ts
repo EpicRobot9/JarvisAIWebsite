@@ -291,17 +291,30 @@ export type StudySet = {
   linkedNoteIds: string[]
   content: { guide?: string; flashcards?: Flashcard[]; test?: McqQuestion[]; match?: MatchPair[] }
   createdAt: string
+  sourceGuideId?: string
 }
 
-export async function generateStudySet(payload: { subject?: string; info?: string; noteIds?: string[]; tools?: StudyToolsRequested; title?: string }): Promise<StudySet> {
+export async function generateStudySet(payload: { subject?: string; info?: string; noteIds?: string[]; tools?: StudyToolsRequested; title?: string; sourceGuideId?: string; adapt?: { focusSectionIds?: string[]; difficultyWeight?: Record<string, number> } }): Promise<StudySet> {
   try {
     const headers: Record<string,string> = { 'Content-Type': 'application/json' }
     const userOpenAI = (localStorage.getItem('user_openai_api_key') || '').trim()
     if (userOpenAI) headers['x-openai-key'] = userOpenAI
-    const r = await fetch('/api/study/generate', { method: 'POST', headers, credentials: 'include', body: JSON.stringify(payload) })
+  const r = await fetch('/api/study/generate', { method: 'POST', headers, credentials: 'include', body: JSON.stringify(payload) })
     if (!r.ok) throw new AppError('router_failed', `Study generate failed ${r.status}: ${r.statusText}`, await safeText(r))
     const data = await r.json()
     return data.set as StudySet
+  } catch (e) {
+    if (!navigator.onLine) throw new AppError('network_offline', 'You appear to be offline.', e)
+    throw AppError.from(e)
+  }
+}
+
+export async function updateStudySet(id: string, patch: { title?: string; content?: { guide?: string } }): Promise<StudySet> {
+  try {
+    const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+    const r = await fetch(`/api/study/sets/${encodeURIComponent(id)}`, { method: 'PATCH', headers, credentials: 'include', body: JSON.stringify(patch) })
+    if (!r.ok) throw new AppError('router_failed', `Study update failed ${r.status}: ${r.statusText}`, await safeText(r))
+    return await r.json()
   } catch (e) {
     if (!navigator.onLine) throw new AppError('network_offline', 'You appear to be offline.', e)
     throw AppError.from(e)
@@ -409,6 +422,15 @@ export async function synthesizeTTS(text: string): Promise<ArrayBuffer> {
       headers['x-elevenlabs-key'] = userEl
       const vid = (localStorage.getItem('user_elevenlabs_voice_id') || '').trim()
       if (vid) headers['x-elevenlabs-voice-id'] = vid
+      // Expressive controls
+      const stab = Number(localStorage.getItem('ux_el_stability') || '0.5')
+      const sim  = Number(localStorage.getItem('ux_el_similarity') || '0.7')
+      const style= Number(localStorage.getItem('ux_el_style') || '0')
+      const boost= (localStorage.getItem('ux_el_boost') || 'false') === 'true'
+      if (Number.isFinite(stab)) headers['x-el-stability'] = String(Math.max(0, Math.min(1, stab)))
+      if (Number.isFinite(sim))  headers['x-el-similarity'] = String(Math.max(0, Math.min(1, sim)))
+      if (Number.isFinite(style)) headers['x-el-style'] = String(Math.max(0, Math.min(1, style)))
+      if (boost) headers['x-el-boost'] = 'true'
     }
     const r = await fetch('/api/tts', { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ text: clean }) })
     if (!r.ok) {
@@ -495,6 +517,15 @@ export function getTtsStreamUrl(text: string): string {
     params.set('key', userEl)
     const vid = (localStorage.getItem('user_elevenlabs_voice_id') || '').trim()
     if (vid) params.set('voiceId', vid)
+    // Expressive controls
+    const stab = Number(localStorage.getItem('ux_el_stability') || '0.5')
+    const sim  = Number(localStorage.getItem('ux_el_similarity') || '0.7')
+    const style= Number(localStorage.getItem('ux_el_style') || '0')
+    const boost= (localStorage.getItem('ux_el_boost') || 'false') === 'true'
+    if (Number.isFinite(stab)) params.set('stability', String(Math.max(0, Math.min(1, stab))))
+    if (Number.isFinite(sim))  params.set('similarity', String(Math.max(0, Math.min(1, sim))))
+    if (Number.isFinite(style)) params.set('style', String(Math.max(0, Math.min(1, style))))
+    if (boost) params.set('boost', 'true')
   }
   // Lower initial chunk latency; 2 is a good balance of quality/latency
   params.set('opt', '2')
@@ -534,4 +565,131 @@ function sanitizeForTTS(text: string): string {
   } catch {
     return text
   }
+}
+
+// ======================
+// Role-play API helpers
+// ======================
+export type RoleplayScenario = { id: string; title: string; description: string }
+export type RoleplayMessage = { role: 'user' | 'assistant' | 'system'; content: string }
+
+export async function listRoleplayScenarios(): Promise<{ items: RoleplayScenario[] }> {
+  try {
+    const r = await fetch('/api/roleplay/scenarios', { credentials: 'include' })
+    if (!r.ok) throw new AppError('router_failed', `Roleplay scenarios failed ${r.status}: ${r.statusText}`, await safeText(r))
+    return await r.json()
+  } catch (e) {
+    if (!navigator.onLine) throw new AppError('network_offline', 'You appear to be offline.', e)
+    throw AppError.from(e)
+  }
+}
+
+export async function roleplayNext(input: { scenarioId: string; sessionId?: string; messages: RoleplayMessage[]; assess?: boolean }): Promise<{ reply: string; feedback?: { summary?: string; scores?: Array<{ criterion?: string; score?: number; notes?: string }> } }>
+{
+  try {
+    const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+    const userOpenAI = (localStorage.getItem('user_openai_api_key') || '').trim()
+    if (userOpenAI) headers['x-openai-key'] = userOpenAI
+    const r = await fetch('/api/roleplay/next', { method: 'POST', headers, credentials: 'include', body: JSON.stringify(input) })
+    if (!r.ok) throw new AppError('router_failed', `Roleplay next failed ${r.status}: ${r.statusText}`, await safeText(r))
+    return await r.json()
+  } catch (e) {
+    if (!navigator.onLine) throw new AppError('network_offline', 'You appear to be offline.', e)
+    throw AppError.from(e)
+  }
+}
+
+export async function listRoleplaySessions(opts: { scenarioId?: string } = {}): Promise<{ items: Array<{ id: string; scenarioId: string; score?: number; createdAt: string }> }>{
+  try {
+    const params = new URLSearchParams()
+    if (opts.scenarioId) params.set('scenarioId', opts.scenarioId)
+    const r = await fetch(`/api/roleplay/sessions?${params.toString()}`, { credentials: 'include' })
+    if (!r.ok) throw new AppError('router_failed', `Roleplay sessions failed ${r.status}: ${r.statusText}`, await safeText(r))
+    return await r.json()
+  } catch (e) {
+    if (!navigator.onLine) throw new AppError('network_offline', 'You appear to be offline.', e)
+    throw AppError.from(e)
+  }
+}
+
+export async function getRoleplayProgress(opts: { scenarioId?: string } = {}): Promise<{ totalSessions: number; avgScore: number | null; recent: Array<{ id: string; score?: number; at: string }> }>{
+  try {
+    const params = new URLSearchParams()
+    if (opts.scenarioId) params.set('scenarioId', opts.scenarioId)
+    const r = await fetch(`/api/roleplay/progress?${params.toString()}`, { credentials: 'include' })
+    if (!r.ok) throw new AppError('router_failed', `Roleplay progress failed ${r.status}: ${r.statusText}`, await safeText(r))
+    return await r.json()
+  } catch (e) {
+    if (!navigator.onLine) throw new AppError('network_offline', 'You appear to be offline.', e)
+    throw AppError.from(e)
+  }
+}
+
+export async function generateDiagram(opts: { text: string; type: 'flowchart'|'sequence'|'class'|'er'|'state' }): Promise<{ mermaid: string; type: string }> {
+  try {
+    const r = await fetch('/api/diagram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(opts)
+    })
+    if (!r.ok) throw new AppError('router_failed', `Diagram gen failed ${r.status}: ${r.statusText}`, await safeText(r))
+    const data = await r.json()
+    return { mermaid: data.mermaid || data.diagram || '', type: data.type || opts.type }
+  } catch (e) {
+    throw AppError.from(e)
+  }
+}
+// --- Study Progress Helpers ---
+export type StudyProgress = { id: string; userId: string; studySetId: string; sectionsCompleted: string[]; timeSpent: number; lastStudied: string; createdAt: string; bookmarks: string[] }
+
+export async function getStudyProgress(id: string): Promise<StudyProgress | null> {
+  try {
+    const r = await fetch(`/api/study/progress/${encodeURIComponent(id)}`, { credentials: 'include' })
+    if (!r.ok) return null
+    const data = await r.json()
+    return data.progress || null
+  } catch { return null }
+}
+
+export async function completeStudySection(studySetId: string, sectionId: string): Promise<StudyProgress | null> {
+  try {
+    console.log('🌐 completeStudySection API call:', { studySetId, sectionId })
+    const url = `/api/study/progress/${encodeURIComponent(studySetId)}/complete`
+    console.log('🌐 URL:', url)
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sectionId }) })
+    console.log('🌐 Response status:', r.status, r.statusText)
+    if (!r.ok) {
+      const errorText = await r.text()
+      console.error('🌐 Response not OK:', errorText)
+      return null
+    }
+    const data = await r.json()
+    console.log('🌐 Response data:', data)
+    return data.progress || null
+  } catch (e) {
+    console.error('🌐 API call exception:', e)
+    return null
+  }
+}
+
+export async function replaceStudyProgress(studySetId: string, sectionsCompleted: string[], opts?: { timeSpent?: number; bookmarks?: string[] }): Promise<StudyProgress | null> {
+  try {
+    const body: any = { sectionsCompleted }
+    if (opts?.timeSpent != null) body.timeSpent = opts.timeSpent
+    if (opts?.bookmarks) body.bookmarks = opts.bookmarks
+    const r = await fetch(`/api/study/progress/${encodeURIComponent(studySetId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(body) })
+    if (!r.ok) return null
+    const data = await r.json()
+    return data.progress || null
+  } catch { return null }
+}
+
+export async function toggleBookmark(studySetId: string, sectionId: string): Promise<StudyProgress | null> {
+  try {
+    const r = await fetch(`/api/study/progress/${encodeURIComponent(studySetId)}/bookmark`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ sectionId }) })
+    if (!r.ok) return null
+    const data = await r.json()
+    return data.progress || null
+  } catch { return null }
 }

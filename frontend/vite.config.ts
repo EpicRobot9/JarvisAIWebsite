@@ -11,7 +11,23 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      '/ws': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          mermaid: ['mermaid'],
+          katex: ['katex']
+        }
+      }
+    }
+  },
 })

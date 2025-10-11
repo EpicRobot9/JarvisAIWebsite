@@ -44,6 +44,17 @@ Pre-configured templates for common study scenarios:
 - **Custom Instructions**: Add your own requirements and preferences
 - **Smart Prompting**: AI understands and follows your specific needs
 
+### 7. **Section Difficulty & Filtering** 🎯
+- **Automatic Difficulty Tags**: Each generated section is tagged as beginner / intermediate / advanced using title heuristics + target difficulty.
+- **Difficulty Chips**: Color-coded badges (green / yellow / red) shown inline in the enhanced guide.
+- **Multi-Dimensional Filters**: Combine status (completed/remaining/bookmarked), type, and difficulty filters simultaneously.
+
+### 8. **Bookmarks & Progress Batching** ⭐
+- **Inline Bookmarking**: Star sections in the table of contents or header.
+- **Bookmarked View**: Quickly focus on starred sections via status filter.
+- **Optimistic Updates**: Completion and bookmark toggles update instantly; server persistence debounced for efficiency.
+- **Time Tracking**: Minutes studied auto-accumulate and persist with other progress changes.
+
 ## 🚀 How It Works
 
 ### In StudyDashboard (Unified Experience):
@@ -64,6 +75,9 @@ Pre-configured templates for common study scenarios:
 3. **NEW**: Navigate to linked flashcards via bidirectional links
 4. Use table of contents for navigation
 5. Mark sections complete, add notes, and bookmark important content
+6. Apply filters (status, type, difficulty, bookmarked) to focus your session
+7. Generate & insert diagrams into sections (Mermaid) when helpful
+8. Regenerate companion artifacts (flashcards/tests/match) after editing or inserting diagrams for updated coverage
 
 ## 🆕 Recent Updates (December 2024)
 
@@ -77,6 +91,9 @@ Pre-configured templates for common study scenarios:
 - **🔗 Bidirectional Linking**: Flashcards link back to their source study guide
 - **🎯 Full Guide Processing**: Study tools analyze entire guide content for comprehensive materials
 - **⚡ Header Integration**: Quick access buttons for all study tools at the top of guides
+- **🎯 Difficulty Filters**: Filter study content by inferred complexity level
+- **⭐ Bookmark Filter**: Isolate only the sections you've starred
+- **🧠 Debounced Saves**: Reduced API chatter by batching progress (sections/time/bookmarks)
 
 ## 🎯 Quick Presets
 2. Expand the "📚 Study Guide Customization" section

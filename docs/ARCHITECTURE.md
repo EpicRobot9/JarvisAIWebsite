@@ -8,6 +8,8 @@
 Key flows:
 - Auth: signup -> (optional approval) -> signin -> session cookie -> /api/auth/me.
 - Voice: browser records webm -> POST /api/transcribe -> post text to n8n webhook (Prod/Test selectable) -> poll /api/jarvis/callback/:id -> optional TTS.
+- (Removed) Lecture Recorder: previously captured long-form audio to auto-generate a Study Set. This workflow is now unified under Jarvis Notes (record/transcribe -> summarize -> generate study assets) and the dedicated /lecture route has been removed.
+- Import URL: client POST /api/import/url -> backend fetches page and extracts readable text -> client POST /api/study/generate.
 	- In call mode, TTS prefers `/api/tts/stream` and maintains a FIFO queue. If streaming fails, it falls back to `/api/tts`, `/api/tts/fallback`, then Web Speech.
 - Text: post text directly to n8n webhook (Prod/Test selectable). If webhook replies immediately, show it; otherwise poll callback.
 
@@ -18,6 +20,7 @@ Call‑mode speech
 - In call mode, the UI speaks via low‑latency streaming TTS (`/api/tts/stream`) and queues multiple messages sequentially. If streaming fails, it falls back to `/api/tts` with buffered playback.
 - The UI auto‑unmutes at call start and restores the prior mute state when the call ends.
  - Optional Continuous Conversation mode: after speaking, the UI may chime and re‑open the mic for a follow‑up with configurable no‑speech timeouts and a brief “Speak now…” nudge.
+ - Push‑to‑Talk: Spacebar supports Hold (press/hold to talk) and Toggle (tap to start/stop). Optional start/stop chime reuses the Wake Chime preset/volume. PTT is disabled when focus is in inputs/textareas.
 
 Webhook integration
 - Frontend decides target URL based on a persisted toggle; defaults can be set via `VITE_WEBHOOK_URL` and `VITE_WEBHOOK_TEST_URL`.
@@ -54,6 +57,7 @@ Jarvis Notes
 	- History panel with search, titles, pinning. Updating an existing note avoids duplicate entries.
 	- Notes render in Markdown with safe HTML collapsible sections (`<details><summary>…</summary>…</details>`).
 	- A Home button links back to the main site.
+ - Chunked summarization: long transcripts are split and summarized in chunks, then merged. The UI shows progress (e.g., “Summarizing 2/5”, “Merging…”) and suggests a title from the first heading of the generated notes (fallback: first 60 chars of the transcript).
 
 Backend
 - Summarize: `POST /api/notes/summarize` (tries `gpt-4o`, falls back to `gpt-4o-mini`). Accepts `instructions`, `collapsible`, `categories`; defaults `collapsible/categories` to true when unset.

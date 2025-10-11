@@ -46,9 +46,20 @@ The Settings modal groups options into collapsible sections to keep things tidy 
 8. Conversation
    - Continuous conversation (toggle)
    - Play chime before follow‑up
-   - No‑speech timeout after follow‑up starts (1–5s)
-   - No‑speech timeout after wake (1–5s)
+   - No‑speech timeout after follow‑up starts (1–15s)
+   - No‑speech timeout after wake (1–15s)
    - Follow‑up “Speak now” nudge duration (0.3–5.0s)
+
+9. Audio Devices
+   - Microphone input selector (per‑browser)
+   - Speaker/output selector (when supported by the browser via setSinkId)
+   - Mic test meter and 2s sample record/playback
+   - Output test tone
+
+10. Push‑to‑Talk
+   - Enable/disable Spacebar push‑to‑talk (global)
+   - Mode: Hold (press and hold to talk) or Toggle (tap to start/stop)
+   - Play chime on start/stop (uses Wake Chime preset/volume)
 
 ## Persistence keys (reference)
 
@@ -62,6 +73,9 @@ The Settings modal groups options into collapsible sections to keep things tidy 
    - WASM tuning: `vad_wasm_guard_ms`, `vad_wasm_min_speech_ms`
 - Wake & chime: `ux_wake_words`, `ux_wake_word` (legacy), `ux_wake_chime_enabled`, `ux_wake_chime_volume`, `ux_wake_chime_data_url`, `ux_wake_chime_preset`
 - Conversation: `ux_continuous_conversation`, `ux_followup_chime_enabled`, `ux_followup_no_speech_sec`, `ux_initial_no_speech_sec`, `ux_followup_nudge_duration_ms`
+- Audio devices: `ux_audio_input_device_id`, `ux_audio_output_device_id`
+- Push‑to‑Talk: `ux_space_ptt_enabled`
+   - Additional PTT controls: `ux_ptt_mode` = `hold` | `toggle`, `ux_ptt_chime_enabled` = boolean
 - Section state: `settings_section_open:<id>`
 
 ## Tips

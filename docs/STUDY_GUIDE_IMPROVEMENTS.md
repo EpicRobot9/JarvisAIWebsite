@@ -6,43 +6,51 @@ The study guide feature has been significantly enhanced with better navigation, 
 ## New Features
 
 ### 1. Enhanced Study Guide Component (`EnhancedStudyGuide.tsx`)
-- **Smart Content Parsing**: Automatically parses markdown study guides into structured sections with metadata
-- **Interactive Navigation**: Table of contents with section completion tracking and bookmarks
-- **Progress Tracking**: Real-time progress tracking with completion percentages and time spent
-- **Study Modes**: Read, Focus, and Review modes for different learning styles
-- **Search & Filter**: Search within sections and filter by difficulty/type
-- **Analytics Dashboard**: Study recommendations, progress stats, and next steps
-- **Personal Notes**: Add personal notes to each section
-- **Smart Bookmarking**: Bookmark important sections for quick access
+- **Smart Content Parsing**: Automatically parses markdown study guides into structured sections with metadata (type, inferred difficulty, time estimate, importance)
+- **Interactive Navigation**: Table of contents with completion indicators, bookmark stars, and quick expand/collapse
+- **Progress Tracking**: Real-time completion %, last studied badge, cumulative time spent (minutes) with debounced persistence
+- **Study Modes**: (Pluggable) Room for future mode-specific UIs (base view currently active)
+- **Search & Multi-Filter Bar**: Live search plus composable filters:
+	- Status: All / Completed / Remaining / Bookmarked
+	- Type: overview / concepts / details / questions / summary (multi-select)
+	- Difficulty: beginner / intermediate / advanced (multi-select)
+	- Counts & `aria-pressed` for accessibility on all filter controls
+- **Difficulty Badges**: Colored chips (green=beginner, yellow=intermediate, red=advanced) per section
+- **Bookmarks**: Inline star toggle in TOC & section header; dedicated Bookmarked filter
+- **Diagram Generation**: Per-section Mermaid diagram buttons (flowchart, sequence, class, ER, state) with throttled calls & lazy-loaded renderer
+- **Optimistic UI**: Immediate local updates for completion & bookmarks with rollback on error
+- **Debounced Saves**: Batched PUT calls consolidating section completion, timeSpent, and bookmark changes (reduces network chatter)
+- **Raw Markdown Toggle**: Switch between enhanced view and raw source
+- **Mark All / Reset**: Bulk complete all sections or reset progress safely
 
 ### 2. Intelligent Content Analysis (`studyGuideUtils.ts`)
-- **Section Classification**: Automatically categorizes content as overview, concepts, details, questions, or summary
-- **Difficulty Assessment**: Analyzes content complexity to assign beginner/intermediate/advanced levels
-- **Time Estimation**: Calculates reading time based on content length and complexity
-- **Keyword Extraction**: Identifies important terms and concepts for search
-- **Study Recommendations**: Generates personalized study suggestions
-- **Study Plan Creation**: Creates optimized study sessions based on available time
+- **Section Classification**: Categorizes content (overview, concepts, details, questions, summary) using titles + heuristics
+- **Difficulty Inference**: Per-section difficulty derived from user requirements + lexical cues (default intermediate)
+- **Time & Importance Heuristics**: Distributes estimated minutes proportionally to target duration if specified
+- **Keyword Extraction**: Pulls capitalized & technical tokens for future semantic search/indexing
+- **Recommendations Engine**: Flags imbalances (too many advanced sections, lack of overview, etc.)
+- **Diagram Injection Utility**: Safe insertion of Mermaid diagrams into the source markdown respecting section markers
 
 ### 3. Database-Backed Progress Tracking
-- **StudyGuideProgress Model**: New database model to persist study progress
-- **Section Completion**: Track which sections have been completed
-- **Time Tracking**: Record time spent studying each guide
-- **Personal Notes**: Store user notes linked to specific sections
-- **Bookmarks**: Save important sections for quick reference
-- **Study Preferences**: Remember user preferences (colors, icons, expand settings)
+- **StudyProgress Model**: Persists sectionsCompleted, timeSpent (minutes), bookmarks, lastStudied timestamp
+- **Section Completion**: Durable across sessions; optimistic writes with eventual consistency
+- **Time Tracking**: Interval-based minute accumulation with flush on unload
+- **Bookmarks**: Stored server-side; toggle endpoint returns updated set
+- **Last Studied**: `@updatedAt` powered timestamp surfaced as relative badge
+- *(Planned)* Personal notes & preferences expansion (schema placeholder patterns maintained)
 
-### 4. Backend API Endpoints
-- `GET /api/study/sets/:id/guide/progress` - Get study guide progress
-- `PUT /api/study/sets/:id/guide/progress` - Update study guide progress
-- `POST /api/study/sets/:id/guide/progress/section` - Mark section complete
+### 4. Backend API Endpoints (Current)
+- `GET /api/study/sets/:id/guide/progress` → Returns `{ sectionsCompleted, timeSpent, bookmarks, lastStudied }`
+- `POST /api/study/sets/:id/guide/progress/complete` → Append one section (legacy flow; may be consolidated)
+- `PUT /api/study/sets/:id/guide/progress` → Replace full progress (debounced batching)
+- `POST /api/study/progress/:id/bookmark/:sectionId` → Toggle bookmark
 
 ### 5. Enhanced Integration
-- **Study Tools Integration**: Generate flashcards, tests, and match games directly from study guide header
-- **Bidirectional Linking**: Flashcards created from study guides link back to the source guide
-- **Unified Study Dashboard**: Single interface for all study tools and content creation
-- **Flashcard Count Control**: Optional setting to specify exact number of flashcards (12-30)
-- **Notes Integration**: Link study guides with Jarvis Notes
-- **Progress Persistence**: All progress saved to database and synced across sessions
+- **Unified Study Dashboard**: Central hub for guide + flashcards + tests + match
+- **Bidirectional Linking**: Cross-navigation between flashcards/tests and source guide
+- **Diagram Insert**: Generated Mermaid diagrams can be inserted into guide markdown
+- **Notes Convergence**: Lecture Recorder feature deprecated—Jarvis Notes now the unified capture path
+- **Resilient Persistence**: Debounced server writes with optimistic local state
 
 ### 6. Study Tools Generation
 - **Top-Level Buttons**: Quick access to generate study tools from the entire guide
@@ -50,6 +58,56 @@ The study guide feature has been significantly enhanced with better navigation, 
 - **Tests**: Generate multiple-choice tests from guide content
 - **Match Games**: Create term-definition matching games
 - **Smart Content Processing**: AI analyzes entire guide to create comprehensive study materials
+
+### 7. Study Tools Integration (Detail)
+The enhanced guide exposes one-click generation for complementary learning artifacts:
+
+| Tool | Trigger | Source Scope | Return Link Back | Status |
+|------|---------|-------------|------------------|--------|
+| Flashcards | Header button | Entire guide markdown | Yes (flashcards → guide) | Implemented |
+| Test (MCQ) | Header button | Entire guide markdown | Yes (test → guide) via localStorage link | Implemented (beta) |
+| Match Game | Header button | Entire guide markdown | Yes (match → guide) via localStorage link | Implemented (alpha) |
+| Diagram Insert | Section toolbar | Single section text | N/A (in-place) | Implemented |
+
+Planned Enhancements:
+- Inline per-section flashcard quick-generate (subset extraction)
+- Adaptive question difficulty based on section difficulty tags
+- Multi-round test regeneration preserving incorrectly answered items
+
+Navigation routes:
+- Flashcards: /study/sets/:id/flashcards
+- Test (MCQ): /study/sets/:id/test
+- Match Game: /study/sets/:id/match
+
+## Next steps
+
+To round out the study guide integrations and UX, here are the prioritized follow-ups:
+
+- Persist reverse links in the database (Implemented: schema + server; wire client progressively)
+	- Add sourceGuideId to tool artifacts (flashcards/test/match) in StudySet
+	- Use backend fields instead of localStorage for cross-device consistency
+
+- Persist diagram insertions to the server (Implemented: PATCH endpoint + client save)
+	- Add PATCH /api/study/sets/:id to update content.guide
+	- Wire “Insert” to save-and-refresh the guide after injecting Mermaid blocks
+
+- Per-section flashcard generation (subset decks) (Implemented in UI)
+	- Add quick-generate button in each section’s toolbar
+	- Use section content as input to generate a smaller, focused deck
+
+- Adaptive test generation (Initial hints wired via adapt field)
+	- Adjust question difficulty using section difficulty tags and user progress
+	- Optionally regenerate tests focusing on incorrect answers from prior attempts
+
+- Bundle and performance
+	- Manual chunking for Mermaid/KaTeX to reduce initial bundle size
+	- Background prefetch for Study Tools pages after guide load
+
+- UX polish
+	- Persist filter selections per-guide (status/type/difficulty/bookmarks)
+	- Add empty states and loading indicators for tool creation actions
+
+---
 
 ## Key Improvements
 
@@ -60,10 +118,10 @@ The study guide feature has been significantly enhanced with better navigation, 
 - **Customization**: User preferences for colors, icons, and layout
 
 ### Learning Features
-- **Adaptive Learning**: Recommendations based on progress and performance
-- **Spaced Repetition**: Integration with existing flashcard SRS system
-- **Progress Visualization**: Visual progress bars and completion indicators
-- **Study Analytics**: Track study patterns and effectiveness
+- **Adaptive Learning**: (Planned) Deeper personalization using per-section difficulty & completion timing
+- **Spaced Repetition**: Flashcards integrate with existing SRS
+- **Progress Visualization**: Progress bar, last studied badge, completion counts
+- **Study Analytics**: (Foundational) Recommendations engine flags structural gaps
 
 ### Content Organization
 - **Automatic Structuring**: Parse unstructured markdown into organized sections
@@ -84,26 +142,30 @@ The study guide feature has been significantly enhanced with better navigation, 
 - Database schema migration
 
 ### State Management
-- React hooks for local state management
-- Database synchronization for progress persistence
-- Optimistic updates with error handling
+- React hooks manage section expansion, filters, diagrams
+- Debounced batched persistence for sections/time/bookmarks
+- Optimistic updates with rollback on error
 
-## Recent Updates (December 2024)
+## Recent Updates (October 2025)
 
-### Study Tools Integration
-- **Consolidated Interface**: Removed separate StudyBuilder component, now everything is handled through StudyDashboard
-- **Header Study Tools**: Added flashcards, test, and match game buttons to the top of study guides
-- **Simplified Navigation**: `/study/new` now redirects to main study dashboard
-- **Full Guide Processing**: Study tools now process the entire study guide content instead of individual sections
+### Enhanced Viewer Evolution
+- **Multi-Dimensional Filters**: Status + type + difficulty + bookmarks
+- **Difficulty Chips**: Color-coded badges per section
+- **Bookmarks & Filter**: Inline starring and dedicated bookmarked view
+- **Lazy Mermaid**: Renderer dynamically imported; generation throttled
+- **Optimistic Completion**: Instant section completion feedback
+- **Progress Batching**: Debounced PUT reduces API chatter
+- **Last Studied Badge**: Relative timestamp display
 
-### Bidirectional Linking
-- **Reverse Linking**: Flashcards created from study guides now show a link back to the source guide
-- **localStorage Integration**: Links stored in both directions for seamless navigation
-- **Visual Indicators**: Study guide buttons appear in flashcard views when linked
+### Integration & Cleanup
+- **Link Back**: Flashcards/tests still show source guide references
+- **Feature Sunset**: Removed standalone Lecture Recorder; consolidated into Notes pipeline
 
-### Enhanced Controls
-- **Flashcard Count Setting**: Users can specify exactly how many flashcards to generate (12-30) or let AI decide
-- **Study Dashboard Integration**: All study creation now happens through the unified dashboard interface
+### Performance & UX
+- **Diagram Throttle**: Prevents rapid duplicate AI diagram calls
+- **Debounced Saves**: Reduced redundant writes (sections/time/bookmarks)
+- **Accessible Filters**: `aria-pressed` for all toggle buttons
+- **Consistent Badges**: Unified pill styles across meta chips
 
 ## Usage
 

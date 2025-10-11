@@ -19,39 +19,91 @@ export function parseStudyGuideContent(markdownContent: string): StudyGuideSecti
 
   const sections: StudyGuideSection[] = []
 
-  // First, extract study guide requirements if they exist
+  // Extract any user-stated requirements to guide classification
   const userRequirements = extractStudyGuideRequirements(markdownContent)
   console.log('🔍 parseStudyGuideContent: Extracted requirements:', userRequirements)
   console.log('🔍 parseStudyGuideContent: Full content preview:', markdownContent.substring(0, 800))
+  console.log('🔍 parseStudyGuideContent: Total content length:', markdownContent.length)
 
-  // More reliable parsing using explicit section markers
-  const lines = markdownContent.split('\n')
+  // Normalize input and split into lines (trim trailing spaces for stability)
+  const lines = markdownContent.replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/[\t ]+$/g, ''))
+
+  // Heuristic title detection for guides without explicit headers/markers
+  const KNOWN_TITLES = [
+    'Introduction',
+    'Overview',
+    'Key Terms and Definitions',
+    'Key Concepts and Definitions',
+    'Lock In',
+    'Practical Examples and Real-World Applications',
+    'Practical Examples',
+    'Real-World Applications',
+    'Practice Questions and Self-Assessment',
+    'Practice Questions',
+    'Comprehensive Summary',
+    'Summary',
+    'Conclusion',
+    'Note'
+  ].map(s => s.toLowerCase())
+
+  function looksLikeTitleLine(line: string): { title: string } | null {
+    const raw = (line || '').trim()
+    if (!raw) return null
+    // Remove optional leading hashes and trailing colon
+    const base = raw.replace(/^#+\s*/, '')
+    const title = base.replace(/:$/, '').trim()
+    if (!title) return null
+    const isKnown = KNOWN_TITLES.includes(title.toLowerCase())
+    const startsUpper = /^[A-Z]/.test(title)
+    const reasonable = title.length >= 3 && title.length <= 100
+    const endsSentence = /[.!?]$/.test(title)
+    // Allow either known titles or reasonably title-cased phrases that don't end with punctuation
+    if (reasonable && (isKnown || (startsUpper && !endsSentence && /[A-Za-z]/.test(title)))) {
+      return { title }
+    }
+    return null
+  }
+
+  // Treat these lines at top as non-content metadata; skip until first section/title
+  const META_LINE = /^(Target\s*Study\s*Duration|Difficulty\s*Level|Study\s*Style)\b/i
+
   let currentSection: Partial<StudyGuideSection> | null = null
   let contentBuffer: string[] = []
+  let beforeAnySection = true
+  let skippingTopMeta = true
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    
-    // Skip Study Guide Requirements section content
-    if (line.startsWith('### Study Guide Requirements:') || 
-        (currentSection && currentSection.title === 'Study Guide Requirements')) {
+    const trimmed = line.trim()
+
+    // Skip the explicit Study Guide Requirements heading and its body
+    if (line.startsWith('### Study Guide Requirements:') || (currentSection && currentSection.title === 'Study Guide Requirements')) {
       if (line.startsWith('### Study Guide Requirements:')) {
-        // Skip this entire section - it's metadata, not content
-        while (i < lines.length && !lines[i + 1]?.match(/^#{1,3}\s|^---SECTION---/)) {
-          i++
-        }
+        while (i < lines.length && !lines[i + 1]?.match(/^#{1,3}\s|^---SECTION---/)) { i++ }
         continue
       }
     }
-    
-    // Check for explicit section markers first (new method)
-    if (line.trim() === '---SECTION---') {
-      // Next line should be the section title
+
+    // Ignore top-of-file meta lines (duration/difficulty/style) until we hit a section marker/title
+    if (skippingTopMeta && beforeAnySection) {
+      if (!trimmed) continue
+      if (META_LINE.test(trimmed)) { continue }
+      if (trimmed === '---SECTION---' || /^#\s+/.test(trimmed) || looksLikeTitleLine(trimmed)) {
+        skippingTopMeta = false
+        // fall through to handle this line now
+      } else if (/^This\s+guide\s+is\s+based\s+on\s+the\s+provided/i.test(trimmed)) {
+        // boilerplate; skip
+        continue
+      }
+    }
+
+    // 1) Preferred: explicit section delimiter followed by a title line
+    if (trimmed === '---SECTION---') {
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1]
-        const title = nextLine.replace(/^#+\s*/, '').trim() // Remove any hash marks
-        
-        // Save previous section if it exists
+        const title = nextLine.replace(/^#+\s*/, '').trim()
+
+        // flush previous section
         if (currentSection && contentBuffer.length > 0 && currentSection.title !== 'Study Guide Requirements') {
           const sectionContent = contentBuffer.join('\n').trim()
           if (sectionContent) {
@@ -67,54 +119,40 @@ export function parseStudyGuideContent(markdownContent: string): StudyGuideSecti
             })
           }
         }
-        
-        // Create new section
-        console.log(`🏗️ Creating section from marker: "${title}"`)
-        
+
         let finalTitle = title
-        if (title.toLowerCase().includes('practical examples') || 
-            title.toLowerCase().includes('real-world applications') ||
-            title.toLowerCase().includes('examples and real-world')) {
+        if (title.toLowerCase().includes('practical examples') || title.toLowerCase().includes('real-world applications') || title.toLowerCase().includes('examples and real-world')) {
           finalTitle = 'Practical Examples and Real-World Applications'
         }
-        
-        const sectionId = finalTitle.toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-+|-+$/g, '')
-        
+        const sectionId = finalTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
         const { type, difficulty, importance, estimatedTime } = classifySection(finalTitle, 1, userRequirements)
-        
-        currentSection = {
-          id: sectionId,
-          title: finalTitle,
-          type,
-          difficulty,
-          importance,
-          estimatedTime
-        }
+        currentSection = { id: sectionId, title: finalTitle, type, difficulty, importance, estimatedTime }
         contentBuffer = []
-        i++ // Skip the title line since we processed it
+        i++ // consume title line
+        beforeAnySection = false
         continue
       }
     }
-    
-    // Fallback: Check if this line is a header (for backward compatibility)
+
+    // 2) Fallback: Markdown headers
     const headerMatch = line.match(/^(#{1,3})\s*(.+)$/)
-    
     if (headerMatch) {
       const headerLevel = headerMatch[1].length
       const title = headerMatch[2].trim()
+      if (title === 'Study Guide Requirements') { currentSection = { title }; contentBuffer = []; continue }
       
-      // Skip Study Guide Requirements section
-      if (title === 'Study Guide Requirements') {
-        currentSection = { title }
-        contentBuffer = []
-        continue
+      // Skip "Overview" section if it only contains meta bullets (duration/difficulty/style)
+      if (title.toLowerCase() === 'overview' && i + 1 < lines.length) {
+        const nextFewLines = lines.slice(i + 1, i + 10).join('\n')
+        if (/Target Study Duration|Difficulty Level|Study Style/i.test(nextFewLines)) {
+          // This is metadata, skip until next section
+          while (i < lines.length && !lines[i + 1]?.match(/^#{1,3}\s/)) { i++ }
+          continue
+        }
       }
-
-      // Only create new sections for h1 headers when no explicit markers are used
-      if (headerLevel === 1) {
-        // Save previous section if it exists
+      
+      // Treat H1 and H2 as section boundaries (H3 stays as content)
+      if (headerLevel === 1 || headerLevel === 2) {
         if (currentSection && contentBuffer.length > 0 && currentSection.title !== 'Study Guide Requirements') {
           const sectionContent = contentBuffer.join('\n').trim()
           if (sectionContent) {
@@ -130,47 +168,66 @@ export function parseStudyGuideContent(markdownContent: string): StudyGuideSecti
             })
           }
         }
-        
-        console.log(`🏗️ Creating section from h1: "${title}"`)
-        
         let finalTitle = title
-        if (title.toLowerCase().includes('practical examples') || 
-            title.toLowerCase().includes('real-world applications') ||
-            title.toLowerCase().includes('examples and real-world')) {
+        if (title.toLowerCase().includes('practical examples') || title.toLowerCase().includes('real-world applications') || title.toLowerCase().includes('examples and real-world')) {
           finalTitle = 'Practical Examples and Real-World Applications'
         }
-        
-        const sectionId = finalTitle.toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-+|-+$/g, '')
-        
+        const sectionId = finalTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
         const { type, difficulty, importance, estimatedTime } = classifySection(finalTitle, headerLevel, userRequirements)
-        
-        currentSection = {
-          id: sectionId,
-          title: finalTitle,
-          type,
-          difficulty,
-          importance,
-          estimatedTime
-        }
+        currentSection = { id: sectionId, title: finalTitle, type, difficulty, importance, estimatedTime }
         contentBuffer = []
+        beforeAnySection = false
       } else {
-        // h2/h3 headers get added as content to the current section
+        // h3 treated as content within the current section
         contentBuffer.push(line)
       }
-    } else if (currentSection && currentSection.title !== 'Study Guide Requirements') {
-      // Add content to current section (but skip requirements section content)
+      continue
+    }
+
+    // 3) Last resort: title-like lines (no markers/headers)
+    const guess = looksLikeTitleLine(trimmed)
+    if (guess) {
+      console.log('🎯 Found title-like line:', guess.title, 'at line', i, 'beforeAnySection:', beforeAnySection, 'hasContent:', contentBuffer.length)
+    }
+    if (guess && (beforeAnySection || (currentSection && contentBuffer.length > 0))) {
+      if (currentSection && contentBuffer.length > 0 && currentSection.title !== 'Study Guide Requirements') {
+        const sectionContent = contentBuffer.join('\n').trim()
+        if (sectionContent) {
+          sections.push({
+            id: currentSection.id!,
+            title: currentSection.title!,
+            content: sectionContent,
+            type: currentSection.type!,
+            difficulty: currentSection.difficulty,
+            estimatedTime: currentSection.estimatedTime || 5,
+            importance: currentSection.importance || 3,
+            keywords: extractKeywords(sectionContent)
+          })
+        }
+      }
+      let finalTitle = guess.title
+      if (finalTitle.toLowerCase().includes('practical examples') || finalTitle.toLowerCase().includes('real-world applications') || finalTitle.toLowerCase().includes('examples and real-world')) {
+        finalTitle = 'Practical Examples and Real-World Applications'
+      }
+      const sectionId = finalTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+      const { type, difficulty, importance, estimatedTime } = classifySection(finalTitle, 1, userRequirements)
+      currentSection = { id: sectionId, title: finalTitle, type, difficulty, importance, estimatedTime }
+      contentBuffer = []
+      beforeAnySection = false
+      continue
+    }
+
+    // Regular text: accumulate into current section or intro
+    if (currentSection && currentSection.title !== 'Study Guide Requirements') {
       contentBuffer.push(line)
-    } else if (line.trim() && sections.length === 0 && !line.includes('Study Guide Requirements')) {
-      // This is content before any headers - create an introduction section
+    } else if (trimmed && sections.length === 0 && !line.includes('Study Guide Requirements')) {
       if (!currentSection) {
         currentSection = {
           id: 'introduction',
           title: 'Introduction',
           type: 'overview',
           importance: 5,
-          estimatedTime: Math.ceil((userRequirements.duration || 30) * 0.1), // 10% of total time for intro
+          estimatedTime: Math.ceil((userRequirements.duration || 30) * 0.1),
           difficulty: userRequirements.difficulty || 'intermediate'
         }
         contentBuffer = []
@@ -178,8 +235,8 @@ export function parseStudyGuideContent(markdownContent: string): StudyGuideSecti
       contentBuffer.push(line)
     }
   }
-  
-  // Don't forget the last section
+
+  // Flush final section
   if (currentSection && contentBuffer.length > 0 && currentSection.title !== 'Study Guide Requirements') {
     sections.push({
       id: currentSection.id!,
@@ -192,17 +249,19 @@ export function parseStudyGuideContent(markdownContent: string): StudyGuideSecti
       keywords: extractKeywords(contentBuffer.join('\n'))
     })
   }
-  
-  // Scale time estimates to match user's target duration
+
+  console.log('🎯 Final parsed sections:', sections.length, 'sections')
+  sections.forEach((s, i) => console.log(`  Section ${i+1}: "${s.title}" (${s.content.length} chars)`))
+
+  // Fit estimated times to target duration if provided
   if (userRequirements.duration && sections.length > 0) {
     const totalCurrentTime = sections.reduce((sum, s) => sum + (s.estimatedTime || 0), 0)
     const scaleFactor = userRequirements.duration / (totalCurrentTime || 1)
-    
     sections.forEach(section => {
       section.estimatedTime = Math.max(1, Math.round((section.estimatedTime || 5) * scaleFactor))
     })
   }
-  
+
   return sections
 }
 

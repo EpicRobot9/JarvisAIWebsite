@@ -46,8 +46,8 @@ Your Jarvis AI Website now includes an **Always-Listening Mode** with wake word 
 - Toggles:
   - “Continuous conversation” → on/off
   - “Play chime before follow-up” → on/off; uses the same chime preset/volume/custom sound as Wake Chime
-  - “No‑speech timeout after follow‑up starts” → 1–5s slider (default 3s) controls how long we wait for speech before falling back to wake listening
-  - “No‑speech timeout after wake” → 1–5s slider (default 3s) controls how long we wait for speech on the first turn after wake word
+  - “No‑speech timeout after follow‑up starts” → 1–15s slider (default 7s) controls how long we wait for speech before falling back to wake listening
+  - “No‑speech timeout after wake” → 1–15s slider (default 8s) controls how long we wait for speech on the first turn after wake word
   - “Follow‑up nudge duration” → 0.3–5.0s slider (default 1.5s) controls how long the “Speak now…” nudge is shown when a follow‑up recording starts
 
 UI note: When Always‑Listening is active, the top‑right status block shows a “Continuous” pill if the mode is enabled.
@@ -329,5 +329,20 @@ You can also toggle “Verbose VAD logs” from Settings → Always‑Listening 
 Tip: The overlay follows the same toggle (`jarvis_debug_vad`) and updates immediately.
 
 See also: SETTINGS.md for a complete list of settings and where to find them.
+
+## Push‑to‑Talk (Spacebar)
+
+Push‑to‑Talk works alongside Wake Word mode for users who prefer manual control:
+
+- Enable from Settings → Push‑to‑Talk.
+- Mode:
+  - Hold: press and hold Space to record; release to send.
+  - Toggle: tap Space once to start recording; tap again to send.
+- Optional start/stop chime: uses the same preset/volume as Wake Chime (configured in Settings → Wake Word & Chime).
+
+Notes:
+- PTT respects input focus and won’t trigger when typing in inputs/textareas.
+- In Toggle mode, repeated keydown events are ignored to prevent unintended bouncing.
+- Chime plays just before the mic starts and right after it stops, so it is not recorded.
 
 The always-listening wake word mode represents a significant enhancement to the Jarvis AI experience, providing hands-free interaction while maintaining user privacy and system reliability through robust fallback mechanisms.

@@ -9,10 +9,9 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "strict": true,
-    "noImplicitAny": false,
     "types": ["node"],
     "outDir": "dist",
     "resolveJsonModule": true
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts", "./types.d.ts" ]
 }

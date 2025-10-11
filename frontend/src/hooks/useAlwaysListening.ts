@@ -3,6 +3,7 @@ import { AppError, sendToWebhook, transcribeAudio, getTtsStreamUrl, synthesizeTT
 import { stopAudio, enqueueStreamUrl, enqueueAudioBuffer, enqueuePlayback, setOnQueueIdleListener, primeAudio, playChime, playPresetChime, playDataUrlWithVolume, speakWithWebSpeech } from '../lib/audio'
 import { shouldSpeak, suppressSpeakingFor } from '../lib/speechGuard'
 import { CALLBACK_URL, PROD_WEBHOOK_URL, TEST_WEBHOOK_URL, SOURCE_NAME } from '../lib/config'
+import { useResolvedWebhookUrls } from './useWebhookUrls'
 import { useWakeWordDetection } from './useWakeWordDetection'
 import { VADController, VadMetrics } from '../lib/vad'
 
@@ -50,9 +51,12 @@ export function useAlwaysListening(opts: {
   }
   const dlog = (...args: any[]) => { if (isDebug()) console.log('[VAD-DEBUG]', ...args) }
 
-  const [urls, setUrls] = useState<{ prod: string; test: string }>({ prod: '', test: '' })
-  const currentWebhookUrl = opts.useTestWebhook ? (urls.test || TEST_WEBHOOK_URL) : (urls.prod || PROD_WEBHOOK_URL)
-  const [vadEngine, setVadEngine] = useState<'js' | 'wasm'>(() => opts.vadConfig?.engine ?? 'js')
+  const { currentWebhookUrl } = useResolvedWebhookUrls(!!opts.useTestWebhook)
+  const [vadEngine, setVadEngine] = useState<'js' | 'wasm' | 'hybrid'>(() => {
+    const ls = (() => { try { return (localStorage.getItem('vad_engine') || '').toLowerCase() } catch { return '' } })()
+    const eng = (opts.vadConfig?.engine ?? (ls === 'wasm' || ls === 'js' || ls === 'hybrid' ? (ls as any) : 'hybrid')) as 'js' | 'wasm' | 'hybrid'
+    return eng
+  })
   const [wasmActive, setWasmActive] = useState<boolean>(false)
   // Track WASM VAD speech timings to guard against premature stop
   const wasmSpeechStartAtRef = useRef<number>(0)
@@ -71,26 +75,7 @@ export function useAlwaysListening(opts: {
     return () => clearInterval(t)
   }, [])
   
-  useEffect(() => {
-    (async () => {
-      try {
-        const cached = {
-          prod: localStorage.getItem('jarvis_webhook_prod') || '',
-          test: localStorage.getItem('jarvis_webhook_test') || ''
-        }
-        if (cached.prod || cached.test) setUrls(cached)
-        const r = await fetch('/api/webhook-urls', { cache: 'no-store' }).catch(() => null)
-        if (r?.ok) {
-          const data = await r.json()
-          setUrls({ prod: data.prod || '', test: data.test || '' })
-          try {
-            localStorage.setItem('jarvis_webhook_prod', data.prod || '')
-            localStorage.setItem('jarvis_webhook_test', data.test || '')
-          } catch {}
-        }
-      } catch {}
-    })()
-  }, [])
+  // Webhook URLs are now managed by useResolvedWebhookUrls
 
   const [state, setState] = useState<AlwaysListeningState>('idle')
   // Keep an imperative ref of state to avoid stale closures in timers/callbacks
@@ -111,7 +96,12 @@ export function useAlwaysListening(opts: {
   const shouldBeRunningRef = useRef<boolean>(false)
   const restartBackoffRef = useRef<number>(0)
   const resumeGuardRef = useRef<boolean>(false)
+  const intentionalStopRef = useRef<boolean>(false)
   const wakeLockRef = useRef<any>(null)
+  const preferredInputIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    try { preferredInputIdRef.current = localStorage.getItem('ux_audio_input_device_id') } catch { preferredInputIdRef.current = null }
+  }, [])
   // Optional override for initial no-speech window (used for follow-up recordings)
   const noSpeechOverrideMsRef = useRef<number | null>(null)
   // Endpointing via Web Speech API during recording
@@ -168,7 +158,19 @@ export function useAlwaysListening(opts: {
     if (stateRef.current === 'recording') return
     
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 48000 } })
+      // Reset speech detection flag for the new segment
+      hasDetectedSpeechRef.current = false
+      // Barge-in: cut TTS as we begin recording
+      try { await stopAudio() } catch {}
+      try { await primeAudio() } catch {}
+      const base: MediaStreamConstraints = { audio: { channelCount: 1, noiseSuppression: true, echoCancellation: true, autoGainControl: true, sampleRate: 48000 } as any }
+      const withDevice: MediaStreamConstraints = preferredInputIdRef.current ? { audio: { ...(base.audio as any), deviceId: preferredInputIdRef.current } } : base
+      let stream: MediaStream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(withDevice)
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      }
       mediaRef.current = stream
       chunksRef.current = []
       dlog('Acquired mic stream; creating MediaRecorder and starting')
@@ -181,7 +183,10 @@ export function useAlwaysListening(opts: {
     const rec = new MediaRecorder(stream)
   rec.ondataavailable = (e) => e.data && chunksRef.current.push(e.data)
     rec.onerror = () => { if (shouldBeRunningRef.current) restartWithBackoff() }
-    rec.onstop = () => { if (shouldBeRunningRef.current && stateRef.current === 'recording') restartWithBackoff() }
+    rec.onstop = () => {
+      // Only auto-restart on unexpected stops while recording and not when we intentionally stopped to process
+      if (shouldBeRunningRef.current && stateRef.current === 'recording' && !intentionalStopRef.current) restartWithBackoff()
+    }
     // Track end -> attempt resume after sleep/device change
     stream.getTracks().forEach(t => t.addEventListener('ended', () => { if (shouldBeRunningRef.current) restartWithBackoff() }))
       recorderRef.current = rec
@@ -247,8 +252,41 @@ export function useAlwaysListening(opts: {
     const blob = await stopRecorderAndGetBlob()
     console.log('[Always Listening] Audio blob size:', blob.size, 'bytes')
     dlog('Recorder stopped; received blob bytes=', blob.size)
-    // If VAD never detected speech, do NOT send to STT/router; resume wake listening
-    if (!hasDetectedSpeechRef.current || blob.size < 500) {
+    // Analyze blob quickly to prevent false positives
+    const shouldSkip = await (async () => {
+      try {
+        if (blob.size < 800) return true
+        const arrayBuf = await blob.arrayBuffer()
+        // Heuristic: estimate duration by assuming ~48kbps Opus in webm (rough), or try decode
+        // Prefer decode when available
+        let durationSec = 0
+        try {
+          const ac = new (window.AudioContext || (window as any).webkitAudioContext)()
+          const audioBuf = await ac.decodeAudioData(arrayBuf.slice(0) as ArrayBuffer)
+          durationSec = audioBuf.duration
+          // Compute RMS of a small sample to reject near-silence
+          const ch0 = audioBuf.getChannelData(0)
+          let sum = 0
+          const n = Math.min(ch0.length, 48000) // up to 1s window
+          for (let i = 0; i < n; i++) sum += ch0[i] * ch0[i]
+          const rms = Math.sqrt(sum / (n || 1))
+          const rmsDb = 20 * Math.log10(rms + 1e-8)
+          // Skip if too short or too quiet
+          if (durationSec < 0.45) return true
+          if (rmsDb < -45) return true
+          try { ac.close() } catch {}
+        } catch {
+          // Fallback heuristic by size if decode fails
+          durationSec = blob.size / 6000 // ~48kbps -> 6kB/s
+          if (durationSec < 0.5) return true
+        }
+        return false
+      } catch {
+        return false
+      }
+    })()
+    // If VAD never detected speech OR audio too short/quiet, skip STT
+    if (!hasDetectedSpeechRef.current || shouldSkip) {
       dlog('No speech detected during segment; skipping STT and resuming wake listening')
       cleanup()
       setAppState('wake_listening')
@@ -432,6 +470,8 @@ export function useAlwaysListening(opts: {
                 setIsWakeWordEnabled(false)
                 opts.onSubtitle?.('🎤 Follow-up: speak now…', false)
                 // Start a fresh recording for the user's follow-up
+                // Barge-in across follow-ups
+                try { await stopAudio() } catch {}
                 startRecording()
               })()
             } else {
@@ -458,7 +498,12 @@ export function useAlwaysListening(opts: {
               setAppState('wake_listening')
               opts.onSubtitle?.('👂 Listening for "Jarvis"...', false)
               setIsWakeWordEnabled(true)
-              setTimeout(() => wakeWordDetection.ensureStarted?.(), 0)
+              // Slight delay to let recognizers reset properly
+              setTimeout(() => {
+                hasDetectedSpeechRef.current = false
+                vadEndedLatchRef.current = false
+                wakeWordDetection.ensureStarted?.()
+              }, 60)
               dlog('finalizeListening threw; forced wake_listening; err=', e)
             }
           })
@@ -520,12 +565,14 @@ export function useAlwaysListening(opts: {
             await new Promise(r => setTimeout(r, 80))
             if (chunksRef.current.length > 0) blob = new Blob(chunksRef.current, { type: 'audio/webm' })
           }
+          // Clear intentional stop latch now that we've fully stopped
+          intentionalStopRef.current = false
           resolve(blob)
         }, 0)
       }
       dlog('Stopping MediaRecorder... current state=', rec.state)
       rec.addEventListener('stop', finalize, { once: true })
-      try { rec.stop() } catch { finalize() }
+      try { intentionalStopRef.current = true; rec.stop() } catch { finalize() }
     })
   }
 
@@ -561,6 +608,9 @@ export function useAlwaysListening(opts: {
       try { endpointRecognitionRef.current.stop() } catch {}
       endpointRecognitionRef.current = null
     }
+    // Reset flags/latches before the next turn
+    hasDetectedSpeechRef.current = false
+    vadEndedLatchRef.current = false
     // Reset any follow-up no-speech override after session ends
     noSpeechOverrideMsRef.current = null
   }
@@ -568,8 +618,8 @@ export function useAlwaysListening(opts: {
   // Voice Activity Detection - automatically stops when user stops speaking
   const startVoiceActivityDetection = useCallback((stream: MediaStream) => {
     try {
-      const engineLs = (() => { try { return (localStorage.getItem('vad_engine') || '').toLowerCase() } catch { return '' } })()
-      const engine = (opts.vadConfig?.engine ?? (engineLs === 'wasm' || engineLs === 'js' ? engineLs : 'js'))
+  const engineLs = (() => { try { return (localStorage.getItem('vad_engine') || '').toLowerCase() } catch { return '' } })()
+  const engine = (opts.vadConfig?.engine ?? (engineLs === 'wasm' || engineLs === 'js' || engineLs === 'hybrid' ? engineLs : 'hybrid')) as 'js' | 'wasm' | 'hybrid'
       setVadEngine(engine)
       dlog('Starting VADController; engine=', engine)
 
@@ -577,8 +627,8 @@ export function useAlwaysListening(opts: {
       try { vadControllerRef.current?.stop() } catch {}
       // Endpoint guard window for VAD-driven end events
       const vadEndpointGuardMs = (() => {
-        const v = Number(localStorage.getItem('ux_vad_endpoint_guard_ms') || localStorage.getItem('ux_endpoint_guard_ms') || '1800')
-        return Number.isFinite(v) ? Math.max(300, Math.min(5000, Math.round(v))) : 1800
+        const v = Number(localStorage.getItem('ux_vad_endpoint_guard_ms') || localStorage.getItem('ux_endpoint_guard_ms') || '2200')
+        return Number.isFinite(v) ? Math.max(300, Math.min(7000, Math.round(v))) : 2200
       })()
 
       vadControllerRef.current = new VADController({
@@ -690,9 +740,9 @@ export function useAlwaysListening(opts: {
       })
 
   // No-speech watchdog: auto stop if no speech soon after start
-      const defaultWindow = 4500
+    const defaultWindow = 8000
       const windowMs = noSpeechOverrideMsRef.current ?? defaultWindow
-      const noSpeechMs = (opts.vadConfig?.minSpeechMs ?? 250) + Math.max(1000, Math.min(5000, windowMs))
+    const noSpeechMs = (opts.vadConfig?.minSpeechMs ?? 600) + Math.max(2000, Math.min(15000, windowMs))
       if (noSpeechWatchdogRef.current) {
         clearTimeout(noSpeechWatchdogRef.current)
         noSpeechWatchdogRef.current = null
@@ -733,7 +783,9 @@ export function useAlwaysListening(opts: {
     // Clear no-speech watchdog
     if (noSpeechWatchdogRef.current) { clearTimeout(noSpeechWatchdogRef.current); noSpeechWatchdogRef.current = null }
     silenceStartRef.current = 0
-    hasDetectedSpeechRef.current = false
+    // Important: do NOT clear hasDetectedSpeech here; it is used right after VAD end
+    // to decide whether to send audio to STT. It will be reset at the next start.
+    // hasDetectedSpeechRef.current = false
   vadEndedLatchRef.current = false
     // Clear any old WASM instance tracking
     if (wasmVadRef.current) {
@@ -747,6 +799,12 @@ export function useAlwaysListening(opts: {
 
   // Hybrid endpointing using Web Speech API during recording
   const startEndpointing = useCallback(() => {
+    // Allow endpointing to be toggled via localStorage; default disabled to reduce premature stops
+    const enabled = (() => { try { return localStorage.getItem('ux_enable_endpointing') === 'true' } catch { return false } })()
+    if (!enabled) {
+      console.log('[Endpoint] Disabled by configuration (ux_enable_endpointing=false)')
+      return
+    }
     try {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
       if (!SpeechRecognition) {
@@ -766,9 +824,11 @@ export function useAlwaysListening(opts: {
       // endpointing "no-speech" or early "onend" will be ignored to prevent
       // immediate auto-stops before the user begins speaking.
       const endpointGuardMs = (() => {
-        const v = Number(localStorage.getItem('ux_endpoint_guard_ms') || '1800')
-        return Number.isFinite(v) ? Math.max(300, Math.min(5000, Math.round(v))) : 1800
+        const v = Number(localStorage.getItem('ux_endpoint_guard_ms') || '2200')
+        return Number.isFinite(v) ? Math.max(300, Math.min(7000, Math.round(v))) : 2200
       })()
+      // Additional soft guard after start to reduce premature stops on subsequent turns
+      const softExtraMs = 800
       recognition.onstart = () => {
         console.log('[Endpoint] SpeechRecognition endpointing started')
         dlog('endpointing started')
@@ -791,8 +851,13 @@ export function useAlwaysListening(opts: {
         if (event.error === 'no-speech') {
           // Ignore very early no-speech errors within guard period
           const sinceStart = performance.now() - recordingStartRef.current
-          if (sinceStart < endpointGuardMs) {
+          if (sinceStart < (endpointGuardMs + softExtraMs)) {
             dlog('endpointing no-speech during guard window -> ignoring (sinceStart=', Math.round(sinceStart), 'ms)')
+            return
+          }
+          // If VAD never detected speech, let VAD/no-speech watchdog decide; ignore endpoint no-speech
+          if (!hasDetectedSpeechRef.current) {
+            dlog('endpointing no-speech but VAD has not seen speech -> ignoring (letting VAD watchdog handle)')
             return
           }
           // Treat as silence; stop recording if still ongoing
@@ -808,8 +873,13 @@ export function useAlwaysListening(opts: {
         dlog('endpointing ended')
         // Ignore very early end events within guard period
         const sinceStart = performance.now() - recordingStartRef.current
-        if (sinceStart < endpointGuardMs) {
+        if (sinceStart < (endpointGuardMs + softExtraMs)) {
           dlog('endpointing ended during guard window -> ignoring (sinceStart=', Math.round(sinceStart), 'ms)')
+          return
+        }
+        // If VAD never detected speech, ignore endpoint end; VAD/no-speech watchdog will handle
+        if (!hasDetectedSpeechRef.current) {
+          dlog('endpointing ended but VAD saw no speech -> ignoring')
           return
         }
         if (stateRef.current === 'recording') {

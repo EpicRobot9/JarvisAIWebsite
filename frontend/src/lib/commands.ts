@@ -6,6 +6,10 @@ export type NotesCommand =
   | { type: 'notes_show' }
   | { type: 'notes_hide' }
 
+export type VoiceMacroCommand =
+  | { type: 'bookmark'; label?: string }
+  | { type: 'repeat' }
+
 // Normalize user text for matching
 function norm(s: string) {
   return (s || '')
@@ -44,5 +48,26 @@ export function parseNotesCommand(input: string): NotesCommand | null {
   if (has(['show transcript', 'show the transcript', 'show notes'])) return { type: 'notes_show' }
   if (has(['hide transcript', 'close transcript', 'close the transcript', 'hide notes'])) return { type: 'notes_hide' }
 
+  return null
+}
+
+/** Detects voice macros like "bookmark that" or "repeat last answer". */
+export function parseVoiceMacro(input: string): VoiceMacroCommand | null {
+  const t = norm(input)
+  if (!t) return null
+
+  // Repeat variants
+  if (/(^|\b)(repeat( that)?|say it again|one more time|again please)(\b|$)/.test(t)) {
+    return { type: 'repeat' }
+  }
+
+  // Bookmark with optional label
+  // e.g., "bookmark that", "bookmark this as key concept", "save that"
+  const bookmarkBare = /(\b)(bookmark that|bookmark this|save that|save this|remember that|remember this)(\b)/
+  if (bookmarkBare.test(t)) return { type: 'bookmark' }
+  const m = t.match(/\bbookmark (?:that|this)?(?: as)? ([a-z0-9\s]{3,50})$/)
+  if (m && m[1]) {
+    return { type: 'bookmark', label: m[1].trim() }
+  }
   return null
 }

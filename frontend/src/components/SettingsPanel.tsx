@@ -98,6 +98,22 @@ export default function SettingsPanel() {
     const v = Number(localStorage.getItem('ux_oss_tts_rate') || '0.85')
     return Number.isFinite(v) ? Math.max(0.5, Math.min(1.5, v)) : 0.85
   })
+  // Expressive TTS (ElevenLabs voice settings)
+  const [elStability, setElStability] = useState<number>(() => {
+    const v = Number(localStorage.getItem('ux_el_stability') || '0.50')
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5
+  })
+  const [elSimilarity, setElSimilarity] = useState<number>(() => {
+    const v = Number(localStorage.getItem('ux_el_similarity') || '0.70')
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.7
+  })
+  const [elStyle, setElStyle] = useState<number>(() => {
+    const v = Number(localStorage.getItem('ux_el_style') || '0')
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0
+  })
+  const [elBoost, setElBoost] = useState<boolean>(() => {
+    try { return localStorage.getItem('ux_el_boost') === 'true' } catch { return false }
+  })
   // Wake word and chime settings
   const [wakeWord, setWakeWord] = useState<string>(() => localStorage.getItem('ux_wake_word') || '')
   const [wakeWords, setWakeWords] = useState<string[]>(() => {
@@ -136,6 +152,10 @@ export default function SettingsPanel() {
   const [nudgeDurationMs, setNudgeDurationMs] = useState<number>(() => {
     const v = Number(localStorage.getItem('ux_followup_nudge_duration_ms') || '1500')
     return Number.isFinite(v) ? Math.max(300, Math.min(5000, Math.round(v))) : 1500
+  })
+  // Experimental streaming mode toggle
+  const [streamingMode, setStreamingMode] = useState<boolean>(() => {
+    try { return JSON.parse(localStorage.getItem('ux_streaming_mode') || 'false') } catch { return false }
   })
   // VAD basic tuning
   const [vadEngine, setVadEngine] = useState<'js' | 'wasm'>(() => {
@@ -251,6 +271,7 @@ export default function SettingsPanel() {
       localStorage.setItem('ux_followup_no_speech_sec', String(Math.max(1, Math.min(15, Number(followupNoSpeechSec) || 7))))
       localStorage.setItem('ux_initial_no_speech_sec', String(Math.max(1, Math.min(15, Number(initialNoSpeechSec) || 8))))
       localStorage.setItem('ux_followup_nudge_duration_ms', String(Math.max(300, Math.min(5000, Number(nudgeDurationMs) || 1500))))
+      localStorage.setItem('ux_streaming_mode', JSON.stringify(!!streamingMode))
     } catch {}
     // VAD tuning
     try {
@@ -262,6 +283,13 @@ export default function SettingsPanel() {
       localStorage.setItem('vad_relative_drop_db', String(Math.max(4, Math.min(30, Number(vadRelDropDb) || 10))))
     } catch {}
     // Wake word + chime
+    // Expressive TTS
+    try {
+      localStorage.setItem('ux_el_stability', String(Math.max(0, Math.min(1, Number(elStability) || 0.5))))
+      localStorage.setItem('ux_el_similarity', String(Math.max(0, Math.min(1, Number(elSimilarity) || 0.7))))
+      localStorage.setItem('ux_el_style', String(Math.max(0, Math.min(1, Number(elStyle) || 0))))
+      if (elBoost) localStorage.setItem('ux_el_boost', 'true'); else localStorage.removeItem('ux_el_boost')
+    } catch {}
     try {
       // Persist multi wake words
       const cleaned = Array.from(new Set(wakeWords.map(w => w.trim().toLowerCase()).filter(Boolean)))
@@ -424,6 +452,24 @@ export default function SettingsPanel() {
                 <label className="text-xs">Relative drop (dB)</label>
                 <input className="jarvis-input" type="number" min={4} max={30} step={1} value={vadRelDropDb} onChange={e=>setVadRelDropDb(Number(e.target.value))} />
               </div>
+            </Section>
+
+            <Section id="expressive-tts" title="Expressive Voice Controls (ElevenLabs)" defaultOpen={false}>
+              <p className="text-xs jarvis-subtle mb-2">Tune voice characteristics when using ElevenLabs. Requires a valid ElevenLabs key.</p>
+              <label className="text-xs">Stability</label>
+              <input className="w-full mb-1" type="range" min={0} max={1} step={0.01} value={elStability} onChange={e=>setElStability(Number(e.target.value))} />
+              <div className="text-xs jarvis-subtle mb-2">{elStability.toFixed(2)}</div>
+              <label className="text-xs">Similarity boost</label>
+              <input className="w-full mb-1" type="range" min={0} max={1} step={0.01} value={elSimilarity} onChange={e=>setElSimilarity(Number(e.target.value))} />
+              <div className="text-xs jarvis-subtle mb-2">{elSimilarity.toFixed(2)}</div>
+              <label className="text-xs">Style</label>
+              <input className="w-full mb-1" type="range" min={0} max={1} step={0.01} value={elStyle} onChange={e=>setElStyle(Number(e.target.value))} />
+              <div className="text-xs jarvis-subtle mb-2">{elStyle.toFixed(2)}</div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm">Speaker boost</label>
+                <input type="checkbox" checked={elBoost} onChange={e=>setElBoost(e.target.checked)} />
+              </div>
+              <div className="text-[10px] text-slate-400">These only apply to ElevenLabs responses. Fallback engines ignore these settings.</div>
             </Section>
             <Section id="api" title="API Keys (optional)" defaultOpen={false}>
               <p className="text-xs jarvis-subtle mb-3">Use your own keys to override defaults. Remove them or click "Use defaults" to switch back to the portal's keys and voice.</p>
@@ -644,6 +690,10 @@ export default function SettingsPanel() {
               <div className="flex items-center justify-between mb-2">
                 <label className="text-sm">Continuous conversation</label>
                 <input type="checkbox" checked={continuousConversation} onChange={e=>setContinuousConversation(e.target.checked)} />
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm">Streaming mode (experimental)</label>
+                <input type="checkbox" checked={streamingMode} onChange={e=>setStreamingMode(e.target.checked)} />
               </div>
               <p className="text-xs jarvis-subtle mb-2">When enabled, after Jarvis finishes speaking it plays the chime and immediately starts recording for your reply. If you don’t speak for a moment, it falls back to wake word listening.</p>
               <div className="flex items-center justify-between mb-2">

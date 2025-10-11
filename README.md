@@ -18,6 +18,13 @@ Highlights
 - Three-tier TTS fallback system: ElevenLabs → eSpeak-NG → Web Speech API ensures audio always works.
 - Token‑secured per‑user pushes from external systems (like n8n) to speak in the active session: `POST /api/integration/push-to-user` with `Authorization: Bearer <INTEGRATION_PUSH_TOKEN>`.
 - In call mode, the UI uses streaming TTS for low latency and queues messages; if streaming fails, it falls back to buffered TTS automatically.
+ - NEW: Push‑to‑Talk modes — Hold or Toggle (Spacebar) — plus optional chime on start/stop (reuses Wake Chime preset/volume). PTT ignores inputs/textareas to prevent conflicts.
+
+Explore net‑new feature ideas and roadmap proposals in `docs/NEW_FEATURES_PROPOSALS.md`.
+
+Jarvis Notes improvements
+- NEW: Chunked summarization for long transcripts with a compact progress indicator (e.g., “Summarizing 2/5”, then “Merging…”)
+- NEW: Smart title suggestion — uses the first heading from generated notes, else the first 60 characters of the transcript
 
 ## Study Tools & Learning Features
 

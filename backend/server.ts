@@ -15,6 +15,7 @@ import { WebSocketServer } from 'ws'
 import type { WebSocket } from 'ws'
 import { exec, spawn } from 'child_process'
 import interstellarRouter from './interstellar.js'
+import { JSDOM } from 'jsdom'
 
 dotenv.config()
 
@@ -60,6 +61,474 @@ app.use(sessionMiddleware)
 
 // Interstellar router
 app.use(interstellarRouter)
+
+// Simple URL import: fetch and extract text content
+app.post('/api/import/url', requireAuth, async (req: any, res) => {
+  try {
+    const { url } = req.body || {}
+    if (!url || typeof url !== 'string') return res.status(400).json({ error: 'missing_url' })
+    const r = await fetch(url, { headers: { 'User-Agent': 'JarvisAI/1.0 (+importer)' } })
+    if (!r.ok) return res.status(400).json({ error: 'fetch_failed', status: r.status })
+    const html = await r.text()
+    const dom = new JSDOM(html)
+    const doc = dom.window.document
+    const title = (doc.querySelector('title')?.textContent || '').trim()
+    // Basic extraction: drop script/style and get visible text
+    doc.querySelectorAll('script,style,noscript').forEach(el => el.remove())
+    const text = (doc.body?.textContent || '').replace(/\s+/g, ' ').trim()
+    return res.json({ title, text })
+  } catch (e) {
+    console.error('Import URL error', e)
+    res.status(500).json({ error: 'import_failed' })
+  }
+})
+
+// Document import: PDF (with optional OCR), DOCX, PPTX
+app.post('/api/import/file', requireAuth, upload.single('file'), async (req: any, res) => {
+  try {
+    const file = req.file
+    if (!file) return res.status(400).json({ error: 'missing_file' })
+    const ocrRequested = String(req.query.ocr || req.body?.ocr || '').toLowerCase() === 'true'
+    const analyze = String(req.query.analyze || req.body?.analyze || '').toLowerCase() !== 'false' // default true
+    const originalName: string = file.originalname || 'document'
+    const ext = (originalName.split('.').pop() || '').toLowerCase()
+    const meta: any = { ext, ocrRequested }
+    let raw = ''
+
+    async function parsePdfEmbedded(): Promise<string> {
+      try {
+        const pdfParseMod = await import('pdf-parse')
+        const pdfParse = (pdfParseMod as any).default || (pdfParseMod as any).pdf || pdfParseMod
+        const data = await pdfParse(file.buffer)
+        return (data.text || '')
+      } catch (e) {
+        meta.pdfParseError = (e as any)?.message || true
+        return ''
+      }
+    }
+
+    async function rasterAndOcrPdf(): Promise<string> {
+      try {
+        // Lazy imports
+        const pdfjsDist: any = await import('pdfjs-dist')
+        // Configure worker if available
+        try {
+          if (pdfjsDist?.GlobalWorkerOptions) {
+            pdfjsDist.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/build/pdf.worker.js')
+          }
+        } catch {}
+        const loadingTask = pdfjsDist.getDocument({ data: file.buffer })
+        const pdf = await loadingTask.promise
+        const { createWorker } = await import('tesseract.js') as any
+        const worker = await createWorker({ logger: () => {} })
+        await worker.loadLanguage('eng')
+        await worker.initialize('eng')
+        let ocrTexts: string[] = []
+        // Use node-canvas for rendering
+        let createCanvas: any
+        try {
+          // Dynamic require to avoid TS resolution error if types not installed
+          // @ts-ignore
+          createCanvas = (await import('canvas')).createCanvas
+          if (!createCanvas) throw new Error('no_createCanvas')
+        } catch (e) {
+          meta.canvasUnavailable = true
+          return ''
+        }
+        const maxPages = Math.min(pdf.numPages, 15) // guard for huge docs
+        for (let i=1; i<=maxPages; i++) {
+          try {
+            const page = await pdf.getPage(i)
+            const viewport = page.getViewport({ scale: 1.5 })
+            const canvas = createCanvas(viewport.width, viewport.height)
+            const ctx = canvas.getContext('2d')
+            const renderContext = { canvasContext: ctx, viewport }
+            await page.render(renderContext).promise
+            const img = canvas.toBuffer('image/png')
+            const { data: { text } } = await worker.recognize(img)
+            if (text && text.trim()) ocrTexts.push(text)
+          } catch (e) {
+            meta.ocrPageErrors = (meta.ocrPageErrors || 0) + 1
+          }
+        }
+        await worker.terminate()
+        meta.ocrPages = ocrTexts.length
+        if (pdf.numPages > maxPages) meta.ocrPagesTruncated = pdf.numPages - maxPages
+        return ocrTexts.join('\n')
+      } catch (e) {
+        meta.ocrRasterError = (e as any)?.message || true
+        return ''
+      }
+    }
+
+    async function extractDocx(): Promise<string> {
+      try {
+        const mammoth = await import('mammoth') as any
+        const r = await mammoth.extractRawText({ buffer: file.buffer })
+        return r.value || ''
+      } catch (e) {
+        meta.docxError = (e as any)?.message || true
+        return ''
+      }
+    }
+    async function extractPptx(): Promise<{ text: string, slides: any[] }> {
+      try {
+        const pptxParser = await import('pptx-parser') as any
+        const slides = await pptxParser.parsePptx(file.buffer) || []
+        const text = Array.isArray(slides) ? slides.map((s: any)=> (s.texts || []).join('\n')).join('\n\n') : ''
+        return { text, slides }
+      } catch (e) {
+        meta.pptxError = (e as any)?.message || true
+        return { text: '', slides: [] }
+      }
+    }
+
+    let slidesMeta: any[]|undefined
+    if (ext === 'pdf') {
+      raw = await parsePdfEmbedded()
+      if (ocrRequested) {
+        const threshold = 40
+        if (raw.trim().length < threshold) {
+          const ocrText = await rasterAndOcrPdf()
+            .catch(()=> '')
+          if (ocrText) {
+            meta.ocrApplied = true
+            raw = raw ? raw + '\n' + ocrText : ocrText
+          } else {
+            meta.ocrAttempted = true
+          }
+        } else {
+          meta.ocrSkipped = 'sufficient_text'
+        }
+      }
+    } else if (ext === 'docx') {
+      raw = await extractDocx()
+    } else if (ext === 'pptx' || ext === 'ppt') {
+      const { text, slides } = await extractPptx()
+      raw = text
+      slidesMeta = slides.map((s:any, idx:number)=> ({ index: idx, textCount: (s.texts||[]).join(' ').length }))
+    } else {
+      return res.status(400).json({ error: 'unsupported_type' })
+    }
+
+    let text = (raw || '').replace(/\s+/g, ' ').trim()
+    if (!text) return res.status(422).json({ error: 'empty_text', meta })
+
+    // Deduplicate repeating headers/footers for PDFs & DOCX (simple heuristic)
+    function removeRepeatingLines(str: string): string {
+      const lines = str.split(/\n+/)
+      const counts: Record<string, number> = {}
+      lines.forEach(l=> { const k = l.trim(); if (k.length>0 && k.length<120) counts[k] = (counts[k]||0)+1 })
+      const threshold = Math.max(2, Math.floor(lines.length * 0.02))
+      const remove = new Set(Object.entries(counts).filter(([,c])=> c>=threshold).map(([k])=>k))
+      if (!remove.size) return str
+      meta.removedRepeating = remove.size
+      return lines.filter(l=> !remove.has(l.trim())).join('\n')
+    }
+    text = removeRepeatingLines(text)
+
+    interface Section { heading: string, content: string }
+    const sections: Section[] = []
+    const headingsRegex = /(\n|^)(#+\s+[^\n]+|[A-Z][A-Z0-9 ,\-]{4,})(?=\n)/g
+    if (analyze) {
+      // Split into pseudo-sections
+      let lastIndex = 0
+      let match: RegExpExecArray | null
+      const src = '\n' + text
+      const found: { idx:number; title:string }[] = []
+      while ((match = headingsRegex.exec(src))) {
+        const title = match[2].trim()
+        const idx = match.index
+        found.push({ idx, title })
+      }
+      for (let i=0; i<found.length; i++) {
+        const start = found[i].idx
+        const end = i+1 < found.length ? found[i+1].idx : src.length
+        const content = src.slice(start, end).replace(/^\n+/, '')
+        sections.push({ heading: found[i].title.slice(0,120), content: content.slice(0, 4000) })
+      }
+      meta.sections = sections.length
+    }
+
+    // Table detection (markdown/simple) & flashcard suggestion
+    const tables: { snippet: string }[] = []
+    const flashcards: { front: string, back: string }[] = []
+    if (analyze) {
+      const lines = text.split(/\n/)
+      for (let i=0; i<lines.length; i++) {
+        const line = lines[i]
+        if (/\|/.test(line) && /---/.test(lines[i+1]||'')) {
+          const snippet = [line, lines[i+1]||'', lines[i+2]||''].join('\n')
+          tables.push({ snippet: snippet.slice(0,300) })
+        }
+        // Simple 'Term: Definition' flashcard pattern
+        const m = line.match(/^([A-Z][A-Za-z0-9 .]{1,80}):\s+(.{5,200})$/)
+        if (m) flashcards.push({ front: m[1].trim(), back: m[2].trim().slice(0,240) })
+        if (flashcards.length >= 50) break
+      }
+      meta.tables = tables.length
+      meta.flashcards = flashcards.length
+    }
+
+    const title = originalName.replace(/\.[^.]+$/, '')
+    // Length guard after analysis but before returning
+    if (text.length > 250_000) {
+      text = text.slice(0, 250_000) + '...'
+      meta.truncated = true
+    }
+
+    res.json({ title, text, source: ext.toUpperCase(), meta, analysis: analyze ? { sections, tables, flashcards, slides: slidesMeta } : undefined })
+  } catch (e) {
+    console.error('Import file error', e)
+    res.status(500).json({ error: 'import_failed' })
+  }
+})
+
+// ==================
+// Role-play Simulator
+// ==================
+type RoleplayScenario = {
+  id: string
+  title: string
+  description: string
+  system: string
+  rubric?: string
+}
+
+const ROLEPLAY_SCENARIOS: RoleplayScenario[] = [
+  {
+    id: 'job-interview-se',
+    title: 'Software Engineering Job Interview',
+    description: 'You are interviewing a mid-level full-stack engineer candidate. Assess backend, frontend, system design, and communication.',
+    system: 'Act as a technical interviewer. Ask one question at a time. Probe for depth and reasoning. If the candidate gets stuck, offer a gentle hint. Keep responses concise.',
+    rubric: 'Score clarity, technical depth, problem-solving, communication (1-5 each). Provide one actionable improvement.'
+  },
+  {
+    id: 'medical-history',
+    title: 'Clinical Role-play: Patient History',
+    description: 'The user is a medical student taking a focused patient history. You are the patient with a specific complaint.',
+    system: 'You are a standardized patient. Provide realistic, concise answers. Reveal details only when asked. Keep emotional tone appropriate.',
+    rubric: 'Score rapport, structure, differential reasoning, and safety/alerts (1-5). Provide 1 key missed question if any.'
+  }
+]
+
+// List scenarios (static for v1)
+app.get('/api/roleplay/scenarios', requireAuth, async (_req: any, res) => {
+  try {
+    const customs = await (prisma as any).roleplayScenario.findMany({ where: { userId: (_req as any).user.id }, orderBy: { createdAt: 'desc' } })
+    const items = [
+      ...ROLEPLAY_SCENARIOS.map(s => ({ id: s.id, title: s.title, description: s.description, builtIn: true })),
+      ...customs.map((s: any) => ({ id: s.id, title: s.title, description: s.description, builtIn: false }))
+    ]
+    res.json({ items })
+  } catch {
+    res.json({ items: ROLEPLAY_SCENARIOS.map(s => ({ id: s.id, title: s.title, description: s.description, builtIn: true })) })
+  }
+})
+
+// Create a custom scenario for the current user
+const CreateScenarioBody = z.object({ title: z.string().min(1), description: z.string().min(1), system: z.string().min(1), rubric: z.string().optional() })
+app.post('/api/roleplay/scenarios', requireAuth, async (req: any, res) => {
+  const v = CreateScenarioBody.safeParse(req.body)
+  if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
+  const row = await (prisma as any).roleplayScenario.create({ data: { userId: req.user.id, title: v.data.title, description: v.data.description, system: v.data.system, rubric: v.data.rubric || null } })
+  res.json({ scenario: { id: row.id, title: row.title, description: row.description } })
+})
+
+// Delete a custom scenario (owned by user)
+app.delete('/api/roleplay/scenarios/:id', requireAuth, async (req: any, res) => {
+  const id = req.params.id
+  try {
+    const row = await (prisma as any).roleplayScenario.findUnique({ where: { id } })
+    if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    await (prisma as any).roleplayScenario.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch {
+    res.status(500).json({ error: 'delete_failed' })
+  }
+})
+
+// Chat progression and optional rubric assessment
+const RoleplayNextBody = z.object({
+  scenarioId: z.string().min(1),
+  sessionId: z.string().optional(),
+  messages: z.array(z.object({ role: z.enum(['system','user','assistant']), content: z.string().min(1) })).min(1),
+  assess: z.boolean().optional()
+})
+app.post('/api/roleplay/next', requireAuth, async (req: any, res) => {
+  try {
+    const v = RoleplayNextBody.safeParse(req.body)
+    if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
+    const { scenarioId, messages, assess, sessionId } = v.data
+    // Resolve scenario from built-ins or user customs
+    let scenario = ROLEPLAY_SCENARIOS.find(s => s.id === scenarioId)
+    if (!scenario) {
+      try {
+        const row = await (prisma as any).roleplayScenario.findUnique({ where: { id: scenarioId } })
+        if (row && row.userId === req.user.id) scenario = { id: row.id, title: row.title, description: row.description, system: row.system, rubric: row.rubric || undefined }
+      } catch {}
+    }
+    if (!scenario) return res.status(404).json({ error: 'scenario_not_found' })
+
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+
+    const oa = new OpenAI({ apiKey })
+    const sys = scenario.system
+    const chatMessages = [
+      { role: 'system' as const, content: sys },
+      ...messages.filter(m => m.role !== 'system').map(m => ({ role: m.role as 'user'|'assistant', content: m.content }))
+    ]
+
+    const completion = await oa.chat.completions.create({
+      model: process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini',
+      messages: chatMessages,
+      temperature: 0.7,
+      max_tokens: 400
+    })
+    const reply = completion.choices?.[0]?.message?.content || ''
+
+  let feedback: any | undefined
+    if (assess && scenario.rubric) {
+      const lastUser = [...messages].reverse().find(m => m.role === 'user')?.content || ''
+      const lastAssistant = reply
+      const rubricPrompt = `You are an evaluator. Scenario rubric:\n${scenario.rubric}\n\nGiven the last user message and assistant response in this role-play, provide:\n- summary (2 sentences)\n- scores: JSON array of {criterion, score (1-5), notes}\nKeep to 120 words max.`
+      const evalMessages = [
+        { role: 'system' as const, content: rubricPrompt },
+        { role: 'user' as const, content: `User: ${lastUser}\nAssistant: ${lastAssistant}` }
+      ]
+      const evalC = await oa.chat.completions.create({
+        model: process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini',
+        messages: evalMessages,
+        temperature: 0.2,
+        max_tokens: 250
+      })
+      const evalText = evalC.choices?.[0]?.message?.content || ''
+      // Best-effort JSON extraction for scores
+      let scores: any[] | undefined
+      try {
+        const m = evalText.match(/\[\s*{[\s\S]*}\s*\]/)
+        if (m) scores = JSON.parse(m[0])
+      } catch {}
+      feedback = { summary: evalText.replace(/\[[\s\S]*$/, '').trim(), scores }
+    }
+
+    // Persist session if sessionId provided
+    if (sessionId) {
+      try {
+        const row = await (prisma as any).roleplaySession.findUnique({ where: { id: sessionId } })
+        const nowMsgs = messages.concat([{ role: 'assistant', content: reply }])
+        const agg = (()=>{
+          try {
+            const arr = (feedback?.scores || []) as any[]
+            if (!Array.isArray(arr) || arr.length === 0) return null
+            const nums = arr.map((s:any)=> Number(s.score || 0)).filter((n:number)=> Number.isFinite(n))
+            if (!nums.length) return null
+            return nums.reduce((a:number,b:number)=>a+b,0) / nums.length
+          } catch { return null }
+        })()
+        if (row && row.userId === req.user.id) {
+          await (prisma as any).roleplaySession.update({ where: { id: sessionId }, data: { messages: nowMsgs as any, feedback: feedback || null, score: agg } })
+        }
+      } catch {}
+    }
+
+    res.json({ reply, feedback })
+  } catch (e) {
+    console.error('roleplay_next error', e)
+    res.status(500).json({ error: 'roleplay_failed' })
+  }
+})
+
+// Create/list/update sessions
+const CreateSessionBody = z.object({ scenarioId: z.string().min(1) })
+app.post('/api/roleplay/sessions', requireAuth, async (req: any, res) => {
+  const v = CreateSessionBody.safeParse(req.body)
+  if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
+  const { scenarioId } = v.data
+  // Validate scenario access
+  let ok = !!ROLEPLAY_SCENARIOS.find(s => s.id === scenarioId)
+  if (!ok) {
+    try {
+      const row = await (prisma as any).roleplayScenario.findUnique({ where: { id: scenarioId } })
+      ok = !!(row && row.userId === req.user.id)
+    } catch {}
+  }
+  if (!ok) return res.status(404).json({ error: 'scenario_not_found' })
+  const row = await (prisma as any).roleplaySession.create({ data: { userId: req.user.id, scenarioId, messages: [] } })
+  res.json({ session: { id: row.id } })
+})
+
+const UpdateSessionBody = z.object({ messages: z.array(z.object({ role: z.string(), content: z.string() })), feedback: z.any().optional(), score: z.number().nullable().optional(), savedSetId: z.string().optional() })
+app.put('/api/roleplay/sessions/:id', requireAuth, async (req: any, res) => {
+  const id = req.params.id
+  const v = UpdateSessionBody.safeParse(req.body)
+  if (!v.success) return res.status(400).json({ error: 'invalid_body', issues: v.error.flatten() })
+  const row = await (prisma as any).roleplaySession.findUnique({ where: { id } })
+  if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+  const upd = await (prisma as any).roleplaySession.update({ where: { id }, data: { messages: v.data.messages as any, feedback: (v.data as any).feedback ?? row.feedback, score: v.data.score ?? row.score, savedSetId: v.data.savedSetId ?? row.savedSetId } })
+  res.json({ session: { id: upd.id } })
+})
+
+// List sessions and simple progress
+app.get('/api/roleplay/sessions', requireAuth, async (req: any, res) => {
+  const scenarioId = (req.query.scenarioId as string | undefined) || undefined
+  const where: any = { userId: req.user.id }
+  if (scenarioId) where.scenarioId = scenarioId
+  const items = await (prisma as any).roleplaySession.findMany({ where, orderBy: { createdAt: 'desc' }, take: 20 })
+  res.json({ items: items.map((r:any)=> ({ id: r.id, scenarioId: r.scenarioId, score: r.score, createdAt: r.createdAt })) })
+})
+
+app.get('/api/roleplay/progress', requireAuth, async (req: any, res) => {
+  const scenarioId = (req.query.scenarioId as string | undefined) || undefined
+  const where: any = { userId: req.user.id }
+  if (scenarioId) where.scenarioId = scenarioId
+  const items = await (prisma as any).roleplaySession.findMany({ where, orderBy: { createdAt: 'desc' }, take: 50 })
+  const scores = items.map((r:any)=> Number(r.score || 0)).filter((n:number)=> Number.isFinite(n) && n>0)
+  const avg = scores.length ? (scores.reduce((a:number,b:number)=>a+b,0)/scores.length) : null
+  res.json({ totalSessions: items.length, avgScore: avg, recent: items.slice(0,5).map((r:any)=> ({ id: r.id, score: r.score, at: r.createdAt })) })
+})
+
+// Export a session to a Study Set
+app.post('/api/roleplay/sessions/:id/export', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const row = await (prisma as any).roleplaySession.findUnique({ where: { id } })
+    if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const scenario = await (prisma as any).roleplayScenario.findUnique({ where: { id: row.scenarioId } }).catch(()=>null)
+    const title = `Role-play: ${scenario?.title || 'Session'} (${new Date().toLocaleDateString()})`
+    // Build source text from messages
+    const msgs: Array<{ role: string; content: string }> = Array.isArray(row.messages) ? row.messages as any : []
+    const source = msgs.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n')
+    // Reuse existing study generation pipeline
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+    const oa = new OpenAI({ apiKey })
+    const system = 'You are a helpful study assistant. Convert the conversation into study materials in strict JSON.'
+    const userPrompt = `Conversation transcript to learn from:\n\n${source}\n\nReturn JSON with keys: guide (markdown), flashcards (array of {front, back}). Keep it concise.`
+    const c = await oa.chat.completions.create({ model: process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini', messages: [ { role: 'system', content: system }, { role: 'user', content: userPrompt } ], temperature: 0.4, max_tokens: 900 })
+    const content = c.choices?.[0]?.message?.content || '{}'
+    let json: any = {}
+    try { json = JSON.parse(content) } catch {
+      const m = content.match(/\{[\s\S]*\}/)
+      if (m) { try { json = JSON.parse(m[0]) } catch {} }
+    }
+    const tools: Array<'guide'|'flashcards'> = []
+    if (typeof json.guide === 'string' && json.guide.trim()) tools.push('guide')
+    if (Array.isArray(json.flashcards) && json.flashcards.length) tools.push('flashcards')
+    const study = await (prisma as any).studySet.create({ data: { userId: req.user.id, title, subject: scenario?.title || null, sourceText: source, tools: tools as any, linkedNoteIds: [], content: { guide: json.guide, flashcards: json.flashcards || [] } } })
+    // mark session as exported
+    try { await (prisma as any).roleplaySession.update({ where: { id }, data: { savedSetId: study.id } }) } catch {}
+    res.json({ ok: true, set: study })
+  } catch (e) {
+    console.error('roleplay_export error', e)
+    res.status(500).json({ error: 'export_failed' })
+  }
+})
 
 // Observability: safe serialization and sanitizer
 const REDACT_KEYS = new Set([
@@ -1008,6 +1477,16 @@ app.post('/api/tts', requireAuth, async (req: any, res) => {
     if (!apiKey) return res.status(400).json({ error: 'tts_not_configured' })
     if (!text) return res.status(400).json({ error: 'missing_text' })
 
+    // Expressive controls via headers
+    const hStab = Number((req.headers['x-el-stability'] as string | undefined) || '')
+    const hSim  = Number((req.headers['x-el-similarity'] as string | undefined) || '')
+    const hStyle= Number((req.headers['x-el-style'] as string | undefined) || '')
+    const hBoost= ((req.headers['x-el-boost'] as string | undefined) || '').toString().toLowerCase()
+    const stability = Number.isFinite(hStab) ? Math.max(0, Math.min(1, hStab)) : 0.5
+    const similarity_boost = Number.isFinite(hSim) ? Math.max(0, Math.min(1, hSim)) : 0.7
+    const style = Number.isFinite(hStyle) ? Math.max(0, Math.min(1, hStyle)) : undefined
+    const use_speaker_boost = hBoost === '1' || hBoost === 'true'
+
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
       method: 'POST',
       headers: {
@@ -1017,7 +1496,11 @@ app.post('/api/tts', requireAuth, async (req: any, res) => {
       body: JSON.stringify({
         text,
         model_id: 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.5, similarity_boost: 0.7 }
+        voice_settings: Object.assign(
+          { stability, similarity_boost },
+          (typeof style === 'number' ? { style } : {}),
+          (use_speaker_boost ? { use_speaker_boost: true } : {})
+        )
       })
     })
     if (!r.ok) return res.status(500).json({ error: 'tts_failed' })
@@ -1045,6 +1528,16 @@ app.get('/api/tts/stream', requireAuth, async (req: any, res) => {
     if (!apiKey) return res.status(400).json({ error: 'tts_not_configured' })
     if (!text) return res.status(400).json({ error: 'missing_text' })
 
+    // Expressive controls via query
+    const qStab = Number((req.query.stability as string | undefined) || '')
+    const qSim  = Number((req.query.similarity as string | undefined) || '')
+    const qStyle= Number((req.query.style as string | undefined) || '')
+    const qBoost= ((req.query.boost as string | undefined) || '').toString().toLowerCase()
+    const stability = Number.isFinite(qStab) ? Math.max(0, Math.min(1, qStab)) : 0.5
+    const similarity_boost = Number.isFinite(qSim) ? Math.max(0, Math.min(1, qSim)) : 0.7
+    const style = Number.isFinite(qStyle) ? Math.max(0, Math.min(1, qStyle)) : undefined
+    const use_speaker_boost = qBoost === '1' || qBoost === 'true'
+
     const controller = new AbortController()
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?optimize_streaming_latency=${encodeURIComponent(optimize)}&output_format=mp3_44100_128`, {
       method: 'POST',
@@ -1056,7 +1549,11 @@ app.get('/api/tts/stream', requireAuth, async (req: any, res) => {
       body: JSON.stringify({
         text,
         model_id: 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.5, similarity_boost: 0.7 }
+        voice_settings: Object.assign(
+          { stability, similarity_boost },
+          (typeof style === 'number' ? { style } : {}),
+          (use_speaker_boost ? { use_speaker_boost: true } : {})
+        )
       }),
       signal: controller.signal as any
     })
@@ -1146,6 +1643,65 @@ app.post('/api/tts/fallback', requireAuth, async (req: any, res) => {
 })
 
 // ==========================
+// Diagram Generation (Mermaid)
+// ==========================
+app.post('/api/diagram', requireAuth, async (req: any, res) => {
+  try {
+    const { text, type } = req.body || {}
+    if (!text || !type) return res.status(400).json({ error: 'missing_fields' })
+    
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+    
+    const oa = new OpenAI({ apiKey })
+    
+    // Build system prompt based on diagram type
+    const typeInstructions: Record<string, string> = {
+      flowchart: 'Create a flowchart diagram showing process flow and decision points.',
+      sequence: 'Create a sequence diagram showing interactions between actors/components over time.',
+      class: 'Create a class diagram showing classes, attributes, methods, and relationships.',
+      er: 'Create an entity-relationship diagram showing database entities and relationships.',
+      state: 'Create a state diagram showing states and transitions.'
+    }
+    
+    const system = `You are a diagram generation assistant. Based on the provided text, generate a valid Mermaid.js ${type} diagram.
+${typeInstructions[type] || 'Create an appropriate diagram.'}
+
+Return ONLY the Mermaid diagram code, no explanations or markdown code blocks. Start directly with the diagram type keyword (e.g., "flowchart TD", "sequenceDiagram", "classDiagram", "erDiagram", "stateDiagram-v2").
+
+Keep it simple and clear. Use meaningful labels. Ensure all syntax is valid Mermaid.js.`
+    
+    const userPrompt = `Generate a ${type} diagram for:\n\n${text}`
+    
+    const completion = await oa.chat.completions.create({
+      model: process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.3,
+      max_tokens: 500
+    })
+    
+    let mermaid = (completion.choices?.[0]?.message?.content || '').trim()
+    
+    // Clean up common issues
+    if (mermaid.startsWith('```mermaid')) {
+      mermaid = mermaid.replace(/^```mermaid\n?/, '').replace(/\n?```$/, '').trim()
+    } else if (mermaid.startsWith('```')) {
+      mermaid = mermaid.replace(/^```\n?/, '').replace(/\n?```$/, '').trim()
+    }
+    
+    res.json({ mermaid, type })
+  } catch (e) {
+    console.error('Diagram generation error:', e)
+    res.status(500).json({ error: 'diagram_failed', detail: (e as Error).message })
+  }
+})
+
+// ==========================
 // Study Tools: generation & grading
 // ==========================
 type StudyGenerateBody = {
@@ -1154,6 +1710,8 @@ type StudyGenerateBody = {
   noteIds?: string[]
   tools?: Array<'guide' | 'flashcards' | 'test' | 'match'>
   title?: string
+  sourceGuideId?: string
+  adapt?: { focusSectionIds?: string[]; difficultyWeight?: Record<string, number> }
 }
 
 // Helper: fetch notes by ids for current user and concatenate their content
@@ -1179,6 +1737,8 @@ app.post('/api/study/generate', requireAuth, async (req: any, res) => {
     const noteIds = Array.isArray(body.noteIds) ? body.noteIds.filter(x => typeof x === 'string' && x) : []
     const tools: Array<'guide'|'flashcards'|'test'|'match'> = (Array.isArray(body.tools) && body.tools.length ? body.tools : ['guide', 'flashcards']).filter(Boolean) as any
     const title = (body.title || subject || (info ? info.slice(0, 60) : '') || 'Study Set').toString()
+    const sourceGuideId = (body.sourceGuideId || '').toString().trim() || undefined
+    const adapt = body.adapt || undefined
 
     // Compose source text from provided info and selected notes
     const notesText = await getNotesTextForUser(req.user.id, noteIds)
@@ -1202,9 +1762,14 @@ app.post('/api/study/generate', requireAuth, async (req: any, res) => {
     const wantTest = tools.includes('test')
     const wantMatch = tools.includes('match')
     const system = 'You are a helpful study assistant. Given source material, produce structured study artifacts in strict JSON. Do not include explanations outside of JSON.'
-    const userPrompt = `Source material:\n\n${source}\n\nProduce a JSON object with up to these keys depending on the request: guide, flashcards, test, match.\n- guide: markdown string (use headings, bullet points; concise).\n- flashcards: array of { front: string, back: string }. 12-30 cards depending on material.\n- test: array of multiple-choice questions; each as { question: string, choices: string[4], answerIndex: 0-3 }. 8-20 questions.\n- match: array of pairs { left: string, right: string } for term-definition matching (8-20 pairs).\nKeep content appropriate and based only on provided material. Avoid fabricating details.`
+  const userPrompt = `Source material:\n\n${source}\n\nProduce a JSON object with up to these keys depending on the request: guide, flashcards, test, match.\n- guide: markdown string. MUST use explicit section markers of the form:\n---SECTION---\n# Title of Section\nContent...\nEach major section MUST begin with the line ---SECTION--- followed by a level-1 heading (#). Provide logical sections (Introduction, Key Concepts, Practical Examples, Practice Questions, Summary, etc.) so a parser can split on the markers easily.\n- flashcards: array of { front: string, back: string }. 12-30 cards depending on material.\n- test: array of multiple-choice questions; each as { question: string, choices: string[4], answerIndex: 0-3 }. 8-20 questions.\n- match: array of pairs { left: string, right: string } for term-definition matching (8-20 pairs).\nKeep content appropriate and based only on provided material. Avoid fabricating details.`
     const toolList = [ wantGuide && 'guide', wantFlash && 'flashcards', wantTest && 'test', wantMatch && 'match' ].filter(Boolean).join(', ')
-    const assistantHint = `Requested sections: ${toolList}. Return strictly valid JSON with only those keys.`
+    let assistantHint = `Requested sections: ${toolList}. Return strictly valid JSON with only those keys.`
+    if (adapt) {
+      const focus = Array.isArray(adapt.focusSectionIds) && adapt.focusSectionIds.length ? `Focus more on these sections: ${adapt.focusSectionIds.join(', ')}.` : ''
+      const diff = adapt.difficultyWeight && Object.keys(adapt.difficultyWeight).length ? `Adjust difficulty distribution using weights ${JSON.stringify(adapt.difficultyWeight)}.` : ''
+      if (focus || diff) assistantHint += ` ${focus} ${diff}`.trim()
+    }
     // Try gpt-4o then gpt-4o-mini
     const models = ['gpt-4o', 'gpt-4o-mini']
     let json: any = null
@@ -1243,6 +1808,15 @@ app.post('/api/study/generate', requireAuth, async (req: any, res) => {
     if (wantMatch && Array.isArray(json.match)) content.match = json.match.map((p: any) => ({ left: String(p.left || ''), right: String(p.right || '') })).filter((p: any) => p.left && p.right)
 
     // Save StudySet
+    // If sourceGuideId provided, ensure it belongs to the same user; otherwise ignore
+    let validSourceGuideId: string | undefined = undefined
+    if (sourceGuideId) {
+      try {
+        const src = await (prisma as any).studySet.findUnique({ where: { id: sourceGuideId } })
+        if (src && src.userId === req.user.id) validSourceGuideId = sourceGuideId
+      } catch {}
+    }
+
     const row = await (prisma as any).studySet.create({
       data: {
         userId: req.user.id,
@@ -1251,12 +1825,107 @@ app.post('/api/study/generate', requireAuth, async (req: any, res) => {
         sourceText: source,
         tools: tools as any,
         linkedNoteIds: noteIds,
-        content
+        content,
+        ...(validSourceGuideId ? { sourceGuideId: validSourceGuideId } : {})
       }
     })
     res.json({ ok: true, set: row })
   } catch (e) {
     res.status(500).json({ error: 'generate_failed' })
+  }
+})
+
+// Patch study set (limited): allow updating content.guide and title
+app.patch('/api/study/sets/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const row = await (prisma as any).studySet.findUnique({ where: { id } })
+    if (!row || row.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const data: any = {}
+    if (req.body?.title && typeof req.body.title === 'string') data.title = req.body.title
+    if (req.body?.content && typeof req.body.content === 'object') {
+      const content = row.content || {}
+      const patch = req.body.content
+      // Only allow guide string update for now
+      if (typeof patch.guide === 'string') content.guide = patch.guide
+      data.content = content
+    }
+    if (!Object.keys(data).length) return res.status(400).json({ error: 'no_changes' })
+    const updated = await (prisma as any).studySet.update({ where: { id }, data })
+    res.json(updated)
+  } catch (e) {
+    res.status(500).json({ error: 'update_failed' })
+  }
+})
+
+
+// --- Study Progress Endpoints ---
+// Get progress for a study set
+app.get('/api/study/progress/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const row = await (prisma as any).studyProgress.findUnique({ where: { userId_studySetId: { userId: req.user.id, studySetId: id } } })
+    res.json({ ok: true, progress: row || null })
+  } catch (e) {
+    res.status(500).json({ error: 'progress_get_failed' })
+  }
+})
+
+// Patch progress (add section completion)
+app.post('/api/study/progress/:id/complete', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const sectionId = (req.body?.sectionId || '').toString().trim()
+    const addMinutes = Number(req.body?.addMinutes || 0)
+    if (!sectionId) return res.status(400).json({ error: 'missing_section' })
+    let progress = await (prisma as any).studyProgress.findUnique({ where: { userId_studySetId: { userId: req.user.id, studySetId: id } } })
+    if (!progress) {
+      progress = await (prisma as any).studyProgress.create({ data: { userId: req.user.id, studySetId: id, sectionsCompleted: [sectionId], timeSpent: Math.max(0, addMinutes) } })
+    } else if (!progress.sectionsCompleted.includes(sectionId)) {
+      progress = await (prisma as any).studyProgress.update({ where: { userId_studySetId: { userId: req.user.id, studySetId: id } }, data: { sectionsCompleted: [...progress.sectionsCompleted, sectionId], timeSpent: progress.timeSpent + Math.max(0, addMinutes) } })
+    }
+    res.json({ ok: true, progress })
+  } catch (e) {
+    res.status(500).json({ error: 'progress_update_failed' })
+  }
+})
+
+// Replace full progress (e.g. future time tracking)
+app.put('/api/study/progress/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const sectionsCompleted: string[] = Array.isArray(req.body?.sectionsCompleted) ? req.body.sectionsCompleted.filter((x: any)=> typeof x === 'string' && x) : []
+    const timeSpent = Number.isFinite(req.body?.timeSpent) ? Math.max(0, Number(req.body.timeSpent)) : undefined
+    const bookmarks: string[] = Array.isArray(req.body?.bookmarks) ? req.body.bookmarks.filter((x:any)=> typeof x === 'string' && x) : undefined
+    let progress = await (prisma as any).studyProgress.findUnique({ where: { userId_studySetId: { userId: req.user.id, studySetId: id } } })
+    if (!progress) {
+      progress = await (prisma as any).studyProgress.create({ data: { userId: req.user.id, studySetId: id, sectionsCompleted, timeSpent: timeSpent ?? 0, bookmarks: bookmarks || [] } })
+    } else {
+      progress = await (prisma as any).studyProgress.update({ where: { userId_studySetId: { userId: req.user.id, studySetId: id } }, data: { sectionsCompleted, ...(timeSpent != null ? { timeSpent } : {}), ...(bookmarks ? { bookmarks } : {}) } })
+    }
+    res.json({ ok: true, progress })
+  } catch (e) {
+    res.status(500).json({ error: 'progress_replace_failed' })
+  }
+})
+
+// Toggle bookmark for a section
+app.post('/api/study/progress/:id/bookmark/:sectionId', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const sectionId = (req.params.sectionId || '').toString().trim()
+    if (!sectionId) return res.status(400).json({ error: 'missing_section' })
+    let progress = await (prisma as any).studyProgress.findUnique({ where: { userId_studySetId: { userId: req.user.id, studySetId: id } } })
+    if (!progress) {
+      progress = await (prisma as any).studyProgress.create({ data: { userId: req.user.id, studySetId: id, sectionsCompleted: [], bookmarks: [sectionId] } })
+    } else {
+      const set = new Set(progress.bookmarks || [])
+  if (set.has(sectionId)) { set.delete(sectionId) } else { set.add(sectionId) }
+      progress = await (prisma as any).studyProgress.update({ where: { userId_studySetId: { userId: req.user.id, studySetId: id } }, data: { bookmarks: Array.from(set) } })
+    }
+    res.json({ ok: true, progress })
+  } catch (e) {
+    res.status(500).json({ error: 'bookmark_toggle_failed' })
   }
 })
 
@@ -1290,6 +1959,17 @@ app.get('/api/study/sets/:id', requireAuth, async (req: any, res) => {
   }
 })
 
+// Get sets derived from a source guide (reverse link)
+app.get('/api/study/sets/:id/derived', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const items = await (prisma as any).studySet.findMany({ where: { userId: req.user.id, sourceGuideId: id }, orderBy: { createdAt: 'desc' }, take: 50 })
+    res.json({ items })
+  } catch {
+    res.status(500).json({ error: 'derived_failed' })
+  }
+})
+
 // Delete a set
 app.delete('/api/study/sets/:id', requireAuth, async (req: any, res) => {
   try {
@@ -1300,6 +1980,357 @@ app.delete('/api/study/sets/:id', requireAuth, async (req: any, res) => {
     res.json({ ok: true })
   } catch {
     res.status(500).json({ error: 'delete_failed' })
+  }
+})
+
+// Build a simple knowledge graph for the current user
+// Nodes: StudySets and linked Notes; Edges: Set -> Note
+app.get('/api/graph', requireAuth, async (req: any, res) => {
+  try {
+    const sets = await (prisma as any).studySet.findMany({ where: { userId: req.user.id }, orderBy: { createdAt: 'desc' }, take: 200 })
+    const noteIdSet = new Set<string>()
+    for (const s of sets) {
+      if (Array.isArray(s.linkedNoteIds)) for (const nid of s.linkedNoteIds) if (nid) noteIdSet.add(String(nid))
+    }
+    const noteIds = Array.from(noteIdSet)
+    const notes = noteIds.length ? await (prisma as any).note.findMany({ where: { userId: req.user.id, id: { in: noteIds } }, select: { id: true, title: true, createdAt: true } }) : []
+    const noteMap = new Map(notes.map((n: any) => [n.id, n]))
+
+  const nodes: any[] = []
+  const edges: any[] = []
+    for (const s of sets) {
+      nodes.push({ id: `set:${s.id}`, rawId: s.id, type: 'studyset', label: s.title || s.subject || 'Study Set', createdAt: s.createdAt })
+      if (Array.isArray(s.linkedNoteIds)) {
+        for (const nid of s.linkedNoteIds) {
+          if (!nid) continue
+          const n: any = noteMap.get(String(nid)) as any
+          if (n && !nodes.find((x: any) => x.id === `note:${n.id}`)) {
+            nodes.push({ id: `note:${n.id}`, rawId: n.id, type: 'note', label: n.title || 'Note', createdAt: n.createdAt })
+          }
+          if (n) edges.push({ source: `set:${s.id}`, target: `note:${n.id}`, kind: 'links' })
+        }
+      }
+    }
+    res.json({ nodes, edges, counts: { sets: sets.length, notes: notes.length, edges: edges.length } })
+  } catch (e) {
+    res.status(500).json({ error: 'graph_failed' })
+  }
+})
+
+// --- Study Set Sharing (ephemeral, in-memory registry) ---
+const sharedSets = new Map<string, any>() // id -> { set, user, ts }
+const sharedIndex: Array<{ id: string, title: string, subject?: string, user: string, ts: number }> = []
+// --- Live Quiz Sessions (ephemeral, in-memory rooms) ---
+type QuizMode = 'classic' | 'gold' | 'royale'
+type QuizUser = { name: string, score: number, gold?: number, lives?: number, eliminated?: boolean }
+type QuizRoom = {
+  host: string
+  hostName: string
+  setId: string
+  mode: QuizMode
+  royaleLives: number
+  goldStealChance: number
+  questions: any[]
+  answers: Record<string, number[]>
+  users: Map<string, QuizUser>
+  started: boolean
+  current: number
+  phase: 'lobby' | 'question' | 'reveal' | 'ended'
+  questionTime: number // seconds
+  endsAt?: number
+  timer?: NodeJS.Timeout
+  ws: Set<WebSocket>
+  rounds: Array<{ index: number, question: string, choices: string[], correctIndex: number, counts: number[], steals?: Array<{from:string,to:string,amount:number}>, eliminated?: string[] }>
+}
+
+const quizRooms = new Map<string, QuizRoom>()
+
+async function getQuizQuestions(setId: string) {
+  const set = await (prisma as any).studySet.findUnique({ where: { id: setId } })
+  if (!set || !set.content?.test || !Array.isArray(set.content.test)) return []
+  // Strip answerIndex when sending to clients until reveal
+  return set.content.test
+}
+
+function quizBroadcast(room: QuizRoom, msg: any) {
+  const data = JSON.stringify(msg)
+  for (const w of room.ws) {
+    try { if ((w as any).readyState === 1) (w as any).send(data) } catch { /* no-op */ }
+  }
+}
+
+function quizState(roomId: string): any {
+  const room = quizRooms.get(roomId)
+  if (!room) return null
+  const participants = Array.from(room.users.entries()).map(([id, u]) => ({ id, name: u.name, score: u.score, gold: u.gold ?? 0, lives: u.lives ?? null, eliminated: !!u.eliminated }))
+  return {
+    type: 'state',
+    roomId,
+    host: room.host,
+    hostName: room.hostName,
+    setId: room.setId,
+    mode: room.mode,
+    started: room.started,
+    phase: room.phase,
+    current: room.current,
+    questionCount: room.questions.length,
+    participants,
+    endsAt: room.endsAt || null
+  }
+}
+
+function startQuestion(roomId: string, index: number) {
+  const room = quizRooms.get(roomId)
+  if (!room) return
+  if (room.timer) { clearTimeout(room.timer); room.timer = undefined }
+  if (index >= room.questions.length) return endQuiz(roomId)
+  room.started = true
+  room.phase = 'question'
+  room.current = index
+  room.endsAt = Date.now() + room.questionTime * 1000
+  // Broadcast question without answerIndex
+  const q = room.questions[index]
+  const safeQ = { question: q.question, choices: q.choices }
+  quizBroadcast(room, { type: 'start', current: index, question: safeQ, endsAt: room.endsAt, mode: room.mode })
+  quizBroadcast(room, quizState(roomId))
+  // Auto-reveal when timer expires
+  room.timer = setTimeout(() => revealQuestion(roomId), room.questionTime * 1000)
+}
+
+function revealQuestion(roomId: string) {
+  const room = quizRooms.get(roomId)
+  if (!room) return
+  if (room.timer) { clearTimeout(room.timer); room.timer = undefined }
+  room.phase = 'reveal'
+  const q = room.questions[room.current]
+  const correct = Number(q.answerIndex || 0)
+  const counts = new Array(q.choices.length).fill(0)
+  // Mode-specific scoring and effects
+  const steals: Array<{ from: string, to: string, amount: number }> = []
+  const eliminatedThisRound: string[] = []
+  const usersEntries = Array.from(room.users.entries())
+  for (const [uid, arr] of Object.entries(room.answers)) {
+    const ans = arr[room.current]
+    const u = room.users.get(uid)
+    if (!u) continue
+    if (room.mode === 'royale' && u.eliminated) continue
+    if (Number.isFinite(ans)) {
+      counts[ans as number] = (counts[ans as number] || 0) + 1
+      const isCorrect = (ans === correct)
+      if (room.mode === 'classic') {
+        if (isCorrect) u.score += 1
+      } else if (room.mode === 'gold') {
+        // Correct → earn random gold 5-15; 20% chance steal 10 from random other
+        if (isCorrect) {
+          const delta = 5 + Math.floor(Math.random() * 11)
+          u.gold = (u.gold || 0) + delta
+          // Attempt steal with 20% chance
+          if (Math.random() < room.goldStealChance && usersEntries.length > 1) {
+            // pick a victim with gold > 0 and not self
+            const candidates = usersEntries.filter(([vid, vv]) => vid !== uid && (vv.gold || 0) > 0)
+            if (candidates.length) {
+              const [vid, vv] = candidates[Math.floor(Math.random() * candidates.length)]
+              const take = Math.min(10, vv.gold || 0)
+              vv.gold = (vv.gold || 0) - take
+              u.gold = (u.gold || 0) + take
+              steals.push({ from: vid, to: uid, amount: take })
+            }
+          }
+        }
+      } else if (room.mode === 'royale') {
+        if (isCorrect) {
+          u.score += 1 // tiebreaker metric
+        } else {
+          u.lives = (u.lives ?? room.royaleLives) - 1
+          if ((u.lives ?? 0) <= 0) { u.eliminated = true; eliminatedThisRound.push(uid) }
+        }
+      }
+    }
+  }
+  // Record round for summary
+  try {
+    room.rounds.push({ index: room.current, question: String(q.question||''), choices: Array.isArray(q.choices)? q.choices.map((c:any)=> String(c)) : [], correctIndex: correct, counts, steals: steals.length? steals: undefined, eliminated: eliminatedThisRound.length? eliminatedThisRound: undefined })
+  } catch {}
+  const leaderboard = Array.from(room.users.entries()).map(([id,u])=>({id,name:u.name,score:u.score, gold:u.gold||0, lives:u.lives??null, eliminated:!!u.eliminated}))
+    .sort((a,b)=>{
+      if (room.mode === 'gold') return (b.gold - a.gold) || (b.score - a.score)
+      if (room.mode === 'royale') return (Number(b.eliminated)-Number(a.eliminated)) || ((b.lives??0)-(a.lives??0)) || (b.score - a.score)
+      return b.score - a.score
+    })
+  quizBroadcast(room, { type: 'reveal', roomId, current: room.current, correctIndex: correct, counts, steals, eliminated: eliminatedThisRound, leaderboard })
+}
+
+function nextQuestion(roomId: string) {
+  const room = quizRooms.get(roomId)
+  if (!room) return
+  const next = room.current + 1
+  if (next < room.questions.length) {
+    startQuestion(roomId, next)
+  } else {
+    endQuiz(roomId)
+  }
+}
+
+function endQuiz(roomId: string) {
+  const room = quizRooms.get(roomId)
+  if (!room) return
+  if (room.timer) { clearTimeout(room.timer); room.timer = undefined }
+  room.phase = 'ended'
+  const leaderboard = Array.from(room.users.entries()).map(([id,u])=>({id,name:u.name,score:u.score, gold:u.gold||0, lives:u.lives??null, eliminated:!!u.eliminated})).sort((a,b)=> b.score - a.score)
+  const summary = {
+    ts: Date.now(),
+    roomId,
+    setId: room.setId,
+    mode: room.mode,
+    host: { id: room.host, name: room.hostName },
+    options: { questionTime: room.questionTime, royaleLives: room.royaleLives, goldStealChance: room.goldStealChance },
+    finalLeaderboard: leaderboard,
+    rounds: room.rounds
+  }
+  ;(quizRooms as any).summaries = (quizRooms as any).summaries || new Map()
+  ;(quizRooms as any).summaries.set(roomId, summary)
+  // Fire-and-forget DB persistence
+  ;(async()=>{
+    try {
+      await (prisma as any).quizSummary.create({ data: {
+        roomId: summary.roomId,
+        setId: summary.setId,
+        mode: summary.mode,
+        hostId: summary.host?.id,
+        hostName: summary.host?.name,
+        options: summary.options,
+        finalLeaderboard: summary.finalLeaderboard,
+        rounds: summary.rounds
+      } })
+    } catch (e) {
+      console.warn('QuizSummary persist failed', (e as any)?.message)
+    }
+  })()
+  quizBroadcast(room, { type: 'end', roomId, leaderboard, answers: room.answers, summaryAvailable: true })
+  // Keep room for a short while so late sockets can read final state, then delete
+  setTimeout(()=> quizRooms.delete(roomId), 60_000)
+}
+
+// Quiz summary endpoint
+app.get('/api/quiz/summary/:roomId', requireAuth, async (req: any, res) => {
+  try {
+    const roomId = req.params.roomId
+    const map: Map<string, any> | undefined = (quizRooms as any).summaries
+    const s = map?.get(roomId)
+    if (s) return res.json({ summary: s })
+    // Fallback to DB persistence
+    try {
+      const db = await (prisma as any).quizSummary.findFirst({ where: { roomId } })
+      if (!db) return res.status(404).json({ error: 'not_found' })
+      res.json({ summary: {
+        ts: new Date(db.createdAt).getTime(),
+        roomId: db.roomId,
+        setId: db.setId,
+        mode: db.mode,
+        host: { id: db.hostId, name: db.hostName },
+        options: db.options,
+        finalLeaderboard: db.finalLeaderboard,
+        rounds: db.rounds
+      }})
+    } catch {
+      return res.status(404).json({ error: 'not_found' })
+    }
+  } catch {
+    res.status(500).json({ error: 'summary_failed' })
+  }
+})
+
+// List recent quiz summaries (combined in-memory + DB)
+app.get('/api/quiz/summaries', requireAuth, async (req: any, res) => {
+  try {
+    const mem: Map<string, any> | undefined = (quizRooms as any).summaries
+    const memItems = mem ? Array.from(mem.values()).map(s => ({
+      roomId: s.roomId,
+      setId: s.setId,
+      mode: s.mode,
+      hostName: s.host?.name,
+      at: s.ts
+    })) : []
+    let dbItems: any[] = []
+    try {
+      const rows = await (prisma as any).quizSummary.findMany({ orderBy: { createdAt: 'desc' }, take: 50 })
+      dbItems = rows.map((r: any) => ({ roomId: r.roomId, setId: r.setId, mode: r.mode, hostName: r.hostName, at: new Date(r.createdAt).getTime() }))
+    } catch {}
+    // De-duplicate by roomId preferring memory
+    const seen = new Set<string>()
+    const merged: any[] = []
+    for (const it of memItems.sort((a,b)=> b.at - a.at)) { if (!seen.has(it.roomId)) { seen.add(it.roomId); merged.push(it) } }
+    for (const it of dbItems) { if (!seen.has(it.roomId)) { seen.add(it.roomId); merged.push(it) } }
+    merged.sort((a,b)=> b.at - a.at)
+    res.json({ items: merged.slice(0, 100) })
+  } catch {
+    res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+const wssQuiz = new WebSocketServer({ noServer: true })
+
+// Publish a study set (by id)
+app.post('/api/study/publish/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const set = await (prisma as any).studySet.findUnique({ where: { id } })
+    if (!set || set.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    sharedSets.set(id, { set, user: req.user.username || req.user.email || req.user.id, ts: Date.now() })
+    if (!sharedIndex.find(x => x.id === id)) {
+      sharedIndex.push({ id, title: set.title, subject: set.subject, user: req.user.username || req.user.email || req.user.id, ts: Date.now() })
+    }
+    res.json({ ok: true })
+  } catch {
+    res.status(500).json({ error: 'publish_failed' })
+  }
+})
+
+// Browse shared sets
+app.get('/api/study/browse', async (req, res) => {
+  try {
+    // Return most recent first
+    const items = sharedIndex.slice().sort((a, b) => b.ts - a.ts).map(x => ({ id: x.id, title: x.title, subject: x.subject, user: x.user, ts: x.ts }))
+    res.json({ items })
+  } catch {
+    res.status(500).json({ error: 'browse_failed' })
+  }
+})
+
+// Get a shared set by id
+app.get('/api/study/shared/:id', async (req, res) => {
+  try {
+    const id = req.params.id
+    const entry = sharedSets.get(id)
+    if (!entry) return res.status(404).json({ error: 'not_found' })
+    res.json({ set: entry.set, user: entry.user, ts: entry.ts })
+  } catch {
+    res.status(500).json({ error: 'read_failed' })
+  }
+})
+
+// Fork a shared set (creates a copy for current user)
+app.post('/api/study/fork/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const entry = sharedSets.get(id)
+    if (!entry) return res.status(404).json({ error: 'not_found' })
+    const orig = entry.set
+    // Create a new StudySet for current user
+    const copy = await (prisma as any).studySet.create({
+      data: {
+        userId: req.user.id,
+        title: orig.title + ' (forked)',
+        subject: orig.subject,
+        sourceText: orig.sourceText,
+        tools: orig.tools,
+        linkedNoteIds: orig.linkedNoteIds,
+        content: orig.content
+      }
+    })
+    res.json({ ok: true, set: copy })
+  } catch {
+    res.status(500).json({ error: 'fork_failed' })
   }
 })
 
@@ -1444,21 +2475,171 @@ app.get('/api/events', (req, res) => {
 const port = Number(process.env.BACKEND_PORT || 8080)
 const server = app.listen(port, () => console.log(`Backend listening on :${port}`))
 
-// WebSocket server for /api/events
+// WebSocket servers for /api/events, /ws/stream, and /ws/quiz
 const wss = new WebSocketServer({ noServer: true })
+const wssStream = new WebSocketServer({ noServer: true })
 server.on('upgrade', (request, socket, head) => {
   try {
     const url = new URL(request.url || '', `http://x`)
-    if (url.pathname !== '/api/events') return
-    const sessionId = url.searchParams.get('sessionId') || ''
-    if (!sessionId) return socket.destroy()
-    const userId = url.searchParams.get('userId') || undefined
-    wss.handleUpgrade(request, socket as any, head, (ws: WebSocket) => {
-      const send = (data: string) => ws.readyState === ws.OPEN && ws.send(data)
-      const unsub = subscribe(sessionId, { kind: 'ws', send, end: () => ws.close() }, userId)
-      ws.on('close', () => unsub())
-      ws.send(JSON.stringify({ type: 'hello', sessionId }))
-    })
+    if (url.pathname === '/ws/quiz') {
+      wssQuiz.handleUpgrade(request, socket as any, head, (ws: WebSocket) => {
+        let roomId = ''
+        let userId = ''
+        ws.on('message', async (raw: any) => {
+          let data: any = null
+          try { data = JSON.parse(String(raw)) } catch {}
+          if (!data || typeof data !== 'object') return
+          if (data.type === 'host') {
+            // Host creates the room
+            roomId = data.roomId || (Math.random().toString(36).slice(2, 8))
+            userId = data.userId || 'host-' + roomId
+            const hostName = (data.name || 'Host').toString().slice(0, 40)
+            const questions = await getQuizQuestions(data.setId)
+            const stealChanceRaw = Number(data.options?.goldStealChance ?? 0.2)
+            const goldStealChance = (()=>{
+              if (!Number.isFinite(stealChanceRaw)) return 0.2
+              if (stealChanceRaw > 1) return Math.max(0, Math.min(1, stealChanceRaw / 100))
+              return Math.max(0, Math.min(1, stealChanceRaw))
+            })()
+            const royaleLives = Math.max(1, Math.min(9, Number(data.options?.royaleLives ?? 3)))
+            const room: QuizRoom = {
+              host: userId,
+              hostName,
+              setId: data.setId,
+              mode: (['classic','gold','royale'].includes(String(data.options?.mode)) ? String(data.options?.mode) : 'classic') as any,
+              royaleLives,
+              goldStealChance,
+              questions,
+              answers: {},
+              users: new Map([[userId, { name: hostName, score: 0, gold: 0, lives: royaleLives, eliminated: false }]]),
+              started: false,
+              current: 0,
+              phase: 'lobby',
+              questionTime: Math.max(5, Math.min(120, Number(data.options?.questionTime ?? 30))),
+              ws: new Set([ws]),
+              rounds: []
+            }
+            quizRooms.set(roomId, room)
+            try { ws.send(JSON.stringify({ type: 'room', roomId, host: userId, joinUrl: `/quiz/join/${roomId}`, questionCount: questions.length, questionTime: room.questionTime, mode: room.mode, options: { royaleLives: room.royaleLives, goldStealChance: room.goldStealChance } })) } catch {}
+            // Also emit initial lobby state
+            try { ws.send(JSON.stringify(quizState(roomId))) } catch {}
+          } else if (data.type === 'join') {
+            roomId = String(data.roomId || '')
+            userId = data.userId || 'user-' + Math.random().toString(36).slice(2, 8)
+            const name = (data.name || 'Player').toString().slice(0, 40)
+            const room = quizRooms.get(roomId)
+            if (!room) { try { ws.send(JSON.stringify({ type: 'error', error: 'room_not_found' })) } catch {}; return }
+            if (room.started) { try { ws.send(JSON.stringify({ type: 'error', error: 'already_started' })) } catch {}; return }
+            room.ws.add(ws)
+            if (!room.users.has(userId)) room.users.set(userId, { name, score: 0, gold: 0, lives: room.royaleLives, eliminated: false })
+            // Send ack and current state
+            try { ws.send(JSON.stringify({ type: 'joined', roomId, userId, name, questionCount: room.questions.length, questionTime: room.questionTime, mode: room.mode, options: { royaleLives: room.royaleLives, goldStealChance: room.goldStealChance } })) } catch {}
+            try { ws.send(JSON.stringify(quizState(roomId))) } catch {}
+            // Notify others lobby updated
+            quizBroadcast(room, quizState(roomId))
+          } else if (data.type === 'start') {
+            const room = quizRooms.get(String(data.roomId || ''))
+            if (!room || room.host !== data.userId) return
+            startQuestion(String(data.roomId), 0)
+          } else if (data.type === 'answer') {
+            const room = quizRooms.get(String(data.roomId || ''))
+            if (!room || !room.started || room.phase !== 'question') return
+            if (!room.answers[data.userId]) room.answers[data.userId] = []
+            // Record only first answer for the question
+            const existing = room.answers[data.userId][room.current]
+            if (typeof existing !== 'number') {
+              room.answers[data.userId][room.current] = Number(data.answerIndex)
+              // Optional: notify count update to host
+              const total = Array.from(room.users.values()).filter(u=> room.mode!=='royale' ? true : !u.eliminated).length
+              const answered = Object.entries(room.answers)
+                .filter(([uid, arr])=> {
+                  const u = room.users.get(uid)
+                  if (!u) return false
+                  if (room.mode==='royale' && u.eliminated) return false
+                  return typeof (arr as number[])[room.current] === 'number'
+                }).length
+              quizBroadcast(room, { type: 'progress', current: room.current, answered, total })
+              // If all participants answered, reveal immediately
+              if (answered >= total) revealQuestion(String(data.roomId))
+            }
+          } else if (data.type === 'next') {
+            const room = quizRooms.get(String(data.roomId || ''))
+            if (!room || room.host !== data.userId) return
+            nextQuestion(String(data.roomId))
+          } else if (data.type === 'state') {
+            const room = quizRooms.get(String(data.roomId || ''))
+            if (!room) return
+            try { ws.send(JSON.stringify(quizState(String(data.roomId)))) } catch {}
+          }
+        })
+        ws.on('close', () => {
+          if (roomId && quizRooms.has(roomId)) {
+            const room = quizRooms.get(roomId)!
+            room.ws.delete(ws)
+            if (room.ws.size === 0 && room.phase !== 'ended') {
+              if (room.timer) { clearTimeout(room.timer); room.timer = undefined }
+              quizRooms.delete(roomId)
+            }
+          }
+        })
+      })
+      return
+    }
+    if (url.pathname === '/api/events') {
+      const sessionId = url.searchParams.get('sessionId') || ''
+      if (!sessionId) return socket.destroy()
+      const userId = url.searchParams.get('userId') || undefined
+      wss.handleUpgrade(request, socket as any, head, (ws: WebSocket) => {
+        const send = (data: string) => ws.readyState === ws.OPEN && ws.send(data)
+        const unsub = subscribe(sessionId, { kind: 'ws', send, end: () => ws.close() }, userId)
+        ws.on('close', () => unsub())
+        ws.send(JSON.stringify({ type: 'hello', sessionId }))
+      })
+      return
+    }
+    if (url.pathname === '/ws/stream') {
+      wssStream.handleUpgrade(request, socket as any, head, (ws: WebSocket) => {
+        // Simple echo-stream prototype: accepts JSON {type:'text', text:string}
+        // and emits partial tokens then a final message.
+        const hello = { type: 'hello', mode: 'stream', ts: Date.now() }
+        try { ws.send(JSON.stringify(hello)) } catch {}
+        ws.on('message', (raw: any) => {
+          let data: any = null
+          try { data = JSON.parse(String(raw)) } catch {}
+          const kind = data?.type || 'text'
+          if (kind === 'ping') {
+            try { ws.send(JSON.stringify({ type: 'pong', ts: Date.now() })) } catch {}
+            return
+          }
+          if (kind === 'text') {
+            const text = String(data?.text || '')
+            if (!text) return
+            // Tokenize by words and stream a few at a time
+            const words = text.split(/\s+/).filter(Boolean)
+            let i = 0
+            const timer = setInterval(() => {
+              if (ws.readyState !== ws.OPEN) { clearInterval(timer); return }
+              const chunk = words.slice(i, i + 3).join(' ')
+              i += 3
+              if (chunk) {
+                try { ws.send(JSON.stringify({ type: 'partial', text: chunk })) } catch {}
+              }
+              if (i >= words.length) {
+                clearInterval(timer)
+                try { ws.send(JSON.stringify({ type: 'final', text })) } catch {}
+              }
+            }, 120)
+            return
+          }
+          // Unknown -> echo raw
+          try { ws.send(JSON.stringify({ type: 'unknown', data })) } catch {}
+        })
+        ws.on('close', () => { /* no-op */ })
+      })
+      return
+    }
+    // Unknown WS path
+    return socket.destroy()
   } catch {
     socket.destroy()
   }

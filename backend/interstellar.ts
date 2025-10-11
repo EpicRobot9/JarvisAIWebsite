@@ -277,60 +277,22 @@ router.get('/api/interstellar/get-codespaces', async (req: any, res) => {
             } else {
               const b3 = await r3.text().catch(()=>'' )
               console.log('⚠️ POST fallback (object) to GET URL failed', { url: getUrl, status: r3.status, bodyPreview: b3?.slice?.(0, 500) })
-
-              // Tertiary attempt: try the configured POST webhook URL in case the flow is unified there
-              try {
-                const postUrlKey = (env === 'test') ? 'INTERSTELLAR_POST_URL_TEST' : 'INTERSTELLAR_POST_URL_PROD'
-                const postUrl = await getSettingValue(postUrlKey)
-                if (postUrl) {
-                  console.log('🔁 Trying POST fallback to POST URL (array form)')
-                  const r4 = await fetch(postUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify([{ TypeOfInfo: 'Sheets' }])
-                  })
-                  if (r4.ok) {
-                    data = await r4.json()
-                    console.log('✅ POST fallback to POST URL (array) succeeded, data:', JSON.stringify(data, null, 2))
-                  } else {
-                    const b4 = await r4.text().catch(()=>'' )
-                    console.log('⚠️ POST fallback to POST URL (array) failed', { url: postUrl, status: r4.status, bodyPreview: b4?.slice?.(0, 500) })
-                    console.log('🔁 Trying POST fallback to POST URL (object form)')
-                    const r5 = await fetch(postUrl, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                      body: JSON.stringify({ TypeOfInfo: 'Sheets' })
-                    })
-                    if (r5.ok) {
-                      data = await r5.json()
-                      console.log('✅ POST fallback to POST URL (object) succeeded, data:', JSON.stringify(data, null, 2))
-                    } else {
-                      const b5 = await r5.text().catch(()=>'' )
-                      console.log('⚠️ POST fallback to POST URL (object) failed', { url: postUrl, status: r5.status, bodyPreview: b5?.slice?.(0, 500) })
-                      // All attempts exhausted
-                      codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
-                      data = { CurrentCodespaces: [], BackUpCodespaces: [] }
-                    }
-                  }
-                } else {
-                  codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
-                  data = { CurrentCodespaces: [], BackUpCodespaces: [] }
-                }
-              } catch (e3) {
-                console.log('⚠️ POST fallback to POST URL error', e3)
-                codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
-                data = { CurrentCodespaces: [], BackUpCodespaces: [] }
-              }
+              // All attempts to the GET URL exhausted
+              const snippet = (b3 || b2 || bodyTxt || '').toString().slice(0, 160)
+              codespacesNote = `External webhook service unavailable (${r.status}). ${snippet ? 'Upstream says: ' + snippet : ''} Showing empty state.`
+              data = { CurrentCodespaces: [], BackUpCodespaces: [] }
             }
           } catch (e2) {
             console.log('⚠️ POST fallback (object) error', e2)
-            codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+            const snippet = (b2 || bodyTxt || '').toString().slice(0, 160)
+            codespacesNote = `External webhook service unavailable (${r.status}). ${snippet ? 'Upstream says: ' + snippet : ''} Showing empty state.`
             data = { CurrentCodespaces: [], BackUpCodespaces: [] }
           }
         }
       } catch (e) {
         console.log('⚠️ POST fallback (array) error', e)
-        codespacesNote = `External webhook service unavailable (${r.status}). Showing empty state.`
+        const snippet = (bodyTxt || '').toString().slice(0, 160)
+        codespacesNote = `External webhook service unavailable (${r.status}). ${snippet ? 'Upstream says: ' + snippet : ''} Showing empty state.`
         data = { CurrentCodespaces: [], BackUpCodespaces: [] }
       }
 
