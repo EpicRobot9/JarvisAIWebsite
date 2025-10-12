@@ -116,6 +116,36 @@ app.post('/api/import/file', requireAuth, upload.single('file'), async (req: any
       }
     }
 
+    async function extractPdfTextViaPdfjs(maxPagesOverride?: number): Promise<string> {
+      try {
+        const pdfjsDist: any = await import('pdfjs-dist')
+        try {
+          if (pdfjsDist?.GlobalWorkerOptions) {
+            pdfjsDist.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/build/pdf.worker.js')
+          }
+        } catch {}
+        const loadingTask = pdfjsDist.getDocument({ data: file.buffer })
+        const pdf = await loadingTask.promise
+        const defaultMax = 50
+        const maxPages = Math.min(pdf.numPages, Math.max(1, maxPagesOverride || defaultMax))
+        let out: string[] = []
+        for (let i=1; i<=maxPages; i++) {
+          try {
+            const page = await pdf.getPage(i)
+            const content = await page.getTextContent()
+            const text = (content.items || []).map((it:any)=> (it.str || '')).join(' ')
+            if (text && text.trim()) out.push(text)
+          } catch (e) {
+            meta.pdfjsTextErrors = (meta.pdfjsTextErrors || 0) + 1
+          }
+        }
+        return out.join('\n')
+      } catch (e) {
+        meta.pdfjsTextError = (e as any)?.message || true
+        return ''
+      }
+    }
+
     async function rasterAndOcrPdf(maxPagesOverride?: number): Promise<string> {
       try {
         // Lazy imports
@@ -198,15 +228,22 @@ app.post('/api/import/file', requireAuth, upload.single('file'), async (req: any
       raw = await parsePdfEmbedded()
       const threshold = 80
       if (raw.trim().length < threshold) {
-        // Attempt limited OCR automatically; expand if user explicitly requested
-        const limit = ocrRequested ? 15 : 5
-        const ocrText = await rasterAndOcrPdf(limit).catch(()=> '')
-        if (ocrText) {
-          meta.ocrApplied = true
-          if (!ocrRequested) meta.ocrAuto = true
-          raw = raw ? raw + '\n' + ocrText : ocrText
+        // Try pdf.js text content extraction before OCR
+        const viaPdfjs = await extractPdfTextViaPdfjs(50)
+        if (viaPdfjs && viaPdfjs.trim().length >= threshold) {
+          meta.pdfjsTextApplied = true
+          raw = viaPdfjs
         } else {
-          meta.ocrAttempted = true
+          // Attempt limited OCR automatically; expand if user explicitly requested
+          const limit = ocrRequested ? 15 : 5
+          const ocrText = await rasterAndOcrPdf(limit).catch(()=> '')
+          if (ocrText) {
+            meta.ocrApplied = true
+            if (!ocrRequested) meta.ocrAuto = true
+            raw = raw ? raw + '\n' + ocrText : ocrText
+          } else {
+            meta.ocrAttempted = true
+          }
         }
       } else if (ocrRequested) {
         meta.ocrSkipped = 'sufficient_text'
