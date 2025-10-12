@@ -626,7 +626,6 @@ export default function Page() {
             <Link to="/graph" className="px-3 py-2 rounded-xl border border-cyan-200/20">Knowledge Graph</Link>
             <Link to="/shared" className="px-3 py-2 rounded-xl border border-cyan-200/20">Shared Study Sets</Link>
             <Link to="/roleplay" className="px-3 py-2 rounded-xl border border-cyan-200/20">Role-play Simulator</Link>
-            <Link to="/lecture" className="px-3 py-2 rounded-xl border border-cyan-200/20">Lecture Recorder</Link>
             <Link to="/import" className="px-3 py-2 rounded-xl border border-cyan-200/20">Import URL/PDF</Link>
             <Link to="/bookmarks" className="px-3 py-2 rounded-xl border border-cyan-200/20">Bookmarks & Macros</Link>
             <Link to="/quiz/join" className="px-3 py-2 rounded-xl border border-cyan-200/20">Join a Live Quiz</Link>
