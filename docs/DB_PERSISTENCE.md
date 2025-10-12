@@ -33,6 +33,32 @@ docker compose exec -T db pg_dump -U jarvis -d jarvis > backups/$(date +%F_%H%M)
 cat backups/2025-09-21_1200-jarvis.sql | docker compose exec -T db psql -U jarvis -d jarvis
 ```
 
+## Repair (ownership/privileges + migration recovery)
+
+If migrations fail with errors like P3009/P3018 or "must be owner of table …", use the automated repair script:
+
+```
+./scripts/repair-db.sh
+```
+
+What it does:
+- Fixes ownership of all public tables/sequences to the `jarvis` role (using the internal `postgres` role when needed)
+- Grants proper privileges and default privileges
+- Detects a previously failed migration and marks it rolled back only when its changes aren’t present
+- Applies pending migrations (including idempotent create-if-missing steps)
+
+Options:
+- `PROJECT_NAME=techexplore` to target a specific compose project
+- `DB_DATA_DIR=/opt/jarvis/db` to include `docker-compose.persist.yml`
+- `CLOUDFLARE_TUNNEL_TOKEN=...` to include the tunnel compose
+
+Post-check:
+
+```
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml logs --tail=120 backend
+docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml exec -T backend sh -lc 'npx prisma migrate status'
+```
+
 ## Upgrading an existing DB volume (owner/role fix)
 
 If your Postgres volume was created before adding the dedicated `jarvis` role, the `jarvis` database and tables may be owned by `postgres`. Prisma may then fail with:

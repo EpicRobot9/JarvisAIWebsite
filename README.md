@@ -201,3 +201,24 @@ The frontend dev server proxies `/api` to `http://localhost:8080`.
 - TTS 500: Add `ELEVENLABS_API_KEY` and verify voice ID.
 - Webhook errors: Confirm the toggle target, your n8n URL, and that your flow responds synchronously (optional) and/or calls back to `/api/jarvis/callback` with the `correlationId` provided in the webhook payload.
  - Voice push shows but doesn’t speak: ensure the user is in Call mode; check Network for `/api/tts/stream` followed by a `/api/tts` fallback if needed. Verify `INTEGRATION_PUSH_TOKEN` header when pushing via `/api/integration/push-to-user`.
+
+Database repair (ownership/privileges + migration reconcile)
+- If the backend logs show Prisma migration errors (e.g., P3009, P3018, or "must be owner of table …"), run the automated repair script:
+
+	./scripts/repair-db.sh
+
+	What it does:
+	- Ensures the stack is up, then fixes ownership of all public tables/sequences to the `jarvis` role (using the internal `postgres` superuser when needed)
+	- Grants proper privileges and default privileges to `jarvis`
+	- Detects and resolves a previously failed migration (marks as rolled back only when its changes aren’t present)
+	- Applies all pending Prisma migrations, including idempotent ones that create missing tables safely
+
+	Options:
+	- `PROJECT_NAME=techexplore` to target a specific Compose project name
+	- `DB_DATA_DIR=/opt/jarvis/db` to auto-include `docker-compose.persist.yml`
+	- `CLOUDFLARE_TUNNEL_TOKEN=…` to auto-include the tunnel compose
+
+	After running, check status:
+
+	docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml logs --tail=120 backend
+	docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml exec -T backend sh -lc 'npx prisma migrate status'
