@@ -16,6 +16,7 @@ import type { WebSocket } from 'ws'
 import { exec, spawn } from 'child_process'
 import interstellarRouter from './interstellar.js'
 import { JSDOM } from 'jsdom'
+import { Readability } from '@mozilla/readability'
 
 dotenv.config()
 
@@ -70,12 +71,20 @@ app.post('/api/import/url', requireAuth, async (req: any, res) => {
     const r = await fetch(url, { headers: { 'User-Agent': 'JarvisAI/1.0 (+importer)' } })
     if (!r.ok) return res.status(400).json({ error: 'fetch_failed', status: r.status })
     const html = await r.text()
-    const dom = new JSDOM(html)
+    const dom = new JSDOM(html, { url })
     const doc = dom.window.document
     const title = (doc.querySelector('title')?.textContent || '').trim()
     // Basic extraction: drop script/style and get visible text
     doc.querySelectorAll('script,style,noscript').forEach(el => el.remove())
-    const text = (doc.body?.textContent || '').replace(/\s+/g, ' ').trim()
+    let text = (doc.body?.textContent || '').replace(/\s+/g, ' ').trim()
+    // Fallback to Readability if text is too short
+    if (!text || text.length < 200) {
+      try {
+        const article = new Readability(doc).parse()
+        const articleText = (article?.textContent || '').replace(/\s+/g, ' ').trim()
+        if (articleText && articleText.length > text.length) text = articleText
+      } catch {}
+    }
     return res.json({ title, text })
   } catch (e) {
     console.error('Import URL error', e)
@@ -107,7 +116,7 @@ app.post('/api/import/file', requireAuth, upload.single('file'), async (req: any
       }
     }
 
-    async function rasterAndOcrPdf(): Promise<string> {
+    async function rasterAndOcrPdf(maxPagesOverride?: number): Promise<string> {
       try {
         // Lazy imports
         const pdfjsDist: any = await import('pdfjs-dist')
@@ -135,7 +144,8 @@ app.post('/api/import/file', requireAuth, upload.single('file'), async (req: any
           meta.canvasUnavailable = true
           return ''
         }
-        const maxPages = Math.min(pdf.numPages, 15) // guard for huge docs
+  const defaultMax = 15
+  const maxPages = Math.min(pdf.numPages, Math.max(1, maxPagesOverride || defaultMax)) // guard for huge docs
         for (let i=1; i<=maxPages; i++) {
           try {
             const page = await pdf.getPage(i)
@@ -186,33 +196,55 @@ app.post('/api/import/file', requireAuth, upload.single('file'), async (req: any
     let slidesMeta: any[]|undefined
     if (ext === 'pdf') {
       raw = await parsePdfEmbedded()
-      if (ocrRequested) {
-        const threshold = 40
-        if (raw.trim().length < threshold) {
-          const ocrText = await rasterAndOcrPdf()
-            .catch(()=> '')
-          if (ocrText) {
-            meta.ocrApplied = true
-            raw = raw ? raw + '\n' + ocrText : ocrText
-          } else {
-            meta.ocrAttempted = true
-          }
+      const threshold = 80
+      if (raw.trim().length < threshold) {
+        // Attempt limited OCR automatically; expand if user explicitly requested
+        const limit = ocrRequested ? 15 : 5
+        const ocrText = await rasterAndOcrPdf(limit).catch(()=> '')
+        if (ocrText) {
+          meta.ocrApplied = true
+          if (!ocrRequested) meta.ocrAuto = true
+          raw = raw ? raw + '\n' + ocrText : ocrText
         } else {
-          meta.ocrSkipped = 'sufficient_text'
+          meta.ocrAttempted = true
         }
+      } else if (ocrRequested) {
+        meta.ocrSkipped = 'sufficient_text'
       }
     } else if (ext === 'docx') {
       raw = await extractDocx()
+      if (!raw || !raw.trim()) {
+        // Fallback: convert to HTML and strip tags
+        try {
+          const mammoth = await import('mammoth') as any
+          const r = await mammoth.convertToHtml({ buffer: file.buffer })
+          const html = String(r.value || '')
+          const txt = html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ')
+          raw = txt
+          meta.docxHtmlFallback = true
+        } catch (e) {
+          meta.docxHtmlFallbackError = (e as any)?.message || true
+        }
+      }
     } else if (ext === 'pptx' || ext === 'ppt') {
       const { text, slides } = await extractPptx()
       raw = text
       slidesMeta = slides.map((s:any, idx:number)=> ({ index: idx, textCount: (s.texts||[]).join(' ').length }))
+      if ((!raw || !raw.trim()) && Array.isArray(slides) && slides.length) {
+        try {
+          const alt = slides.map((s:any)=> [s.title, (s.notes||[]).join(' '), (s.texts||[]).join(' ')].filter(Boolean).join(' ')).join('\n\n')
+          if (alt && alt.trim().length > 0) {
+            raw = alt
+            meta.pptxAltAssembled = true
+          }
+        } catch {}
+      }
     } else {
       return res.status(400).json({ error: 'unsupported_type' })
     }
 
     let text = (raw || '').replace(/\s+/g, ' ').trim()
-    if (!text) return res.status(422).json({ error: 'empty_text', meta })
+  if (!text) return res.status(422).json({ error: 'empty_text', meta })
 
     // Deduplicate repeating headers/footers for PDFs & DOCX (simple heuristic)
     function removeRepeatingLines(str: string): string {
