@@ -115,16 +115,16 @@ run_sql "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO jarvis
 run_sql "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO jarvis;"
 run_sql "ALTER TABLE IF EXISTS public._prisma_migrations OWNER TO jarvis;"
 
-# Decide how to reconcile the failed migration 20251010030000_add_source_guide
+## Reconcile previous failed migration(s)
+# 1) If an earlier migration failed (add_studyprogress_fks), mark it as applied so idempotent later migration can proceed.
+echo "[repair-db] Ensuring prior failed FK migration is cleared (if present)"
+docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate resolve --applied 20251009050000_add_studyprogress_fks' || true
+
+# 2) Do NOT roll back source_guide unless it was actually applied; previous behavior caused P3011.
 echo "[repair-db] Checking StudySet.sourceGuideId presence..."
 HAS_SOURCE_GUIDE=$(docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U jarvis -d jarvis -tAc \"SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='StudySet' AND column_name='sourceGuideId');\"")
 HAS_SOURCE_GUIDE=${HAS_SOURCE_GUIDE//[$'\r\n\t ']}
 echo "[repair-db] sourceGuideId exists? => ${HAS_SOURCE_GUIDE:-unknown}"
-
-if [[ "${HAS_SOURCE_GUIDE}" != "t" ]]; then
-  echo "[repair-db] Marking failed migration as rolled back: 20251010030000_add_source_guide"
-  docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate resolve --rolled-back 20251010030000_add_source_guide' || true
-fi
 
 echo "[repair-db] Applying Prisma migrations..."
 if docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate deploy'; then
