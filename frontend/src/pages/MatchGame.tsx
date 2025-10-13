@@ -23,6 +23,7 @@ export default function MatchGame() {
       return null
     }
   }, [id])
+  const backHref = useMemo(() => linkedStudyGuideId ? `/study/sets/${linkedStudyGuideId}` : '/study', [linkedStudyGuideId])
 
   useEffect(() => {
     let mounted = true
@@ -132,7 +133,7 @@ export default function MatchGame() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="p-4 border-b border-slate-800 flex items-center gap-3">
-        <Link to={`/study/sets/${id}`} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
+        <Link to={backHref} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
         <div className="font-medium">Match Game</div>
         {linkedStudyGuideId && (
           <Link 
@@ -192,7 +193,7 @@ export default function MatchGame() {
             <div className="text-sm mb-4">Completed in <b>{moves}</b> moves.</div>
             <div className="mt-2 flex gap-2">
               <button onClick={resetGame} className="px-4 py-2.5 rounded-md bg-slate-900 text-white">Play Again</button>
-              <Link to={`/study/sets/${id}`} className="px-4 py-2.5 rounded-md border border-slate-300">Back to Set</Link>
+              <Link to={backHref} className="px-4 py-2.5 rounded-md border border-slate-300">Back</Link>
             </div>
           </div>
         </div>

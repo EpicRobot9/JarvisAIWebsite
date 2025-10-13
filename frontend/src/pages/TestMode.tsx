@@ -60,6 +60,8 @@ export default function TestMode() {
     }
   }, [id])
   
+  const backHref = useMemo(() => linkedStudyGuideId ? `/study/sets/${linkedStudyGuideId}` : '/study', [linkedStudyGuideId])
+  
   const current = questions[idx]
 
   // Manage per-question timer lifecycle
@@ -195,7 +197,7 @@ Write a short, encouraging one- to two-sentence message tailored to their result
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="p-4 border-b border-slate-800 flex items-center gap-3 relative">
-        <Link to={`/study/sets/${id}`} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
+        <Link to={backHref} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
         <div className="font-medium">Test Mode</div>
         {linkedStudyGuideId && (
           <Link 
@@ -248,7 +250,7 @@ Write a short, encouraging one- to two-sentence message tailored to their result
               <div className="text-slate-300 mb-2">Score: {score} / {questions.length}</div>
               <div className="flex gap-2 justify-center">
                 <button onClick={retake} className="px-4 py-2.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white">Retake Test</button>
-                <Link to={`/study/sets/${id}`} className="px-4 py-2.5 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300">Back to Set</Link>
+                <Link to={backHref} className="px-4 py-2.5 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300">Back</Link>
               </div>
             </div>
             {/* Review list */}
@@ -363,7 +365,7 @@ Write a short, encouraging one- to two-sentence message tailored to their result
             </div>
             <div className="mt-6 flex gap-3 justify-center">
               <button onClick={retake} className="px-4 py-2.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white">Retake Test</button>
-              <Link to={`/study/sets/${id}`} className="px-4 py-2.5 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300">Back to Set</Link>
+              <Link to={backHref} className="px-4 py-2.5 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300">Back</Link>
               <button onClick={()=>setShowFinishModal(false)} className="px-4 py-2.5 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300">Close</button>
             </div>
           </div>
