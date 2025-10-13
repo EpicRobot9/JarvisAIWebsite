@@ -274,3 +274,19 @@ model AIProfile {
 
   @@unique([userId])
 }
+
+/// Vector memory store for long-term context (embeddings in Postgres for v1)
+model VectorMemory {
+  id         String   @id @default(cuid())
+  userId     String
+  boardId    String
+  kind       String   // 'card' | 'summary' | 'agent' | 'intent'
+  topic      String   @default("")
+  summary    String   @default("")
+  importance Int      @default(0)
+  embedding  Float[]
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  @@index([userId, boardId])
+}

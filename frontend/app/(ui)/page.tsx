@@ -465,6 +465,16 @@ export default function Page() {
             className="w-full inline-block jarvis-btn text-center"
             title="Open Study Dashboard"
           >Study Dashboard</Link>
+            <Link
+              to="/boards"
+              className="rounded-xl bg-slate-900/40 border border-slate-800 hover:bg-slate-900/60 p-4 flex items-center gap-3"
+            >
+              <div className="w-10 h-10 rounded-lg bg-emerald-600/20 border border-emerald-700 flex items-center justify-center text-emerald-300">🗂️</div>
+              <div>
+                <div className="text-slate-100 font-medium">AI Boards</div>
+                <div className="text-xs text-slate-400">Plan, organize, and create with AI on a visual canvas</div>
+              </div>
+            </Link>
           <Link
             to="/quiz/join"
             className="w-full inline-block jarvis-btn text-center"

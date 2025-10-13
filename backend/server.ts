@@ -63,6 +63,50 @@ app.use(sessionMiddleware)
 // Interstellar router
 app.use(interstellarRouter)
 
+// =========
+// Utilities
+// =========
+
+function vecCosine(a: number[] | Float32Array, b: number[] | Float32Array): number {
+  let dot = 0, na = 0, nb = 0
+  const n = Math.min(a.length, b.length)
+  for (let i=0; i<n; i++) { const x = a[i] as number, y = b[i] as number; dot += x*y; na += x*x; nb += y*y }
+  if (na === 0 || nb === 0) return 0
+  return dot / (Math.sqrt(na) * Math.sqrt(nb))
+}
+
+async function getOpenAIFromReq(req: any): Promise<OpenAI | null> {
+  const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+  const dbKey = await getSettingValue('OPENAI_API_KEY')
+  const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+  if (!apiKey) return null
+  return new OpenAI({ apiKey })
+}
+
+function boardItemToText(it: any): string {
+  const c = it?.content || {}
+  if (it?.type === 'note') return String(c.text || '')
+  if (it?.type === 'checklist') return (Array.isArray(c.items)? c.items:[]).map((ci:any)=> `- ${ci.text}${ci.done?' [x]':''}`).join('\n')
+  if (it?.type === 'link') return `${c.title||c.url||''} ${c.desc||''}`.trim()
+  if (it?.type === 'image') return `${c.caption||''} ${c.url||''}`.trim()
+  if (it?.type === 'group') return String(c.title || '')
+  return ''
+}
+
+async function embedTexts(oa: OpenAI, texts: string[], model: string = (process.env.EMBEDDING_MODEL || 'text-embedding-3-small')): Promise<number[][]> {
+  if (!texts.length) return []
+  // Chunk into batches to respect token limits
+  const out: number[][] = []
+  const batchSize = 64
+  for (let i=0; i<texts.length; i+=batchSize) {
+    const slice = texts.slice(i, i+batchSize)
+    const r = await oa.embeddings.create({ model, input: slice })
+    const vecs = (r.data || []).map(d => (d.embedding as number[]))
+    out.push(...vecs)
+  }
+  return out
+}
+
 // Simple URL import: fetch and extract text content
 app.post('/api/import/url', requireAuth, async (req: any, res) => {
   try {
@@ -1229,6 +1273,266 @@ app.delete('/api/boards/:id/edges/:edgeId', requireAuth, async (req: any, res) =
   } catch (e) {
     res.status(500).json({ error: 'delete_failed' })
   }
+})
+
+// =====================
+// Boards: AI Enhancements
+// =====================
+
+// Suggest links between semantically related items
+app.post('/api/boards/:id/ai/suggest-links', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+
+    const oa = await getOpenAIFromReq(req)
+    if (!oa) return res.status(400).json({ error: 'openai_not_configured' })
+
+    const body = req.body || {}
+    const itemIds: string[] | undefined = Array.isArray(body.itemIds) ? body.itemIds.filter((x:any)=> typeof x === 'string' && x) : undefined
+    const commit = Boolean(body.commit)
+    const threshold = Math.max(0, Math.min(1, Number(body.threshold ?? 0.78)))
+    const maxPairs = Math.max(1, Math.min(50, Number(body.max ?? 25)))
+
+    const items: any[] = await (prisma as any).boardItem.findMany({ where: { boardId: id, ...(itemIds ? { id: { in: itemIds } } : {}) } })
+    if (items.length < 2) return res.json({ suggestions: [], created: [] })
+
+    const texts = items.map(boardItemToText).map(t => t.slice(0, 4000))
+    const vecs = await embedTexts(oa, texts)
+    const pairs: { sourceId: string; targetId: string; score: number }[] = []
+    for (let i=0; i<items.length; i++) {
+      for (let j=i+1; j<items.length; j++) {
+        const s = vecCosine(vecs[i] as any, vecs[j] as any)
+        if (s >= threshold) pairs.push({ sourceId: items[i].id, targetId: items[j].id, score: s })
+      }
+    }
+    pairs.sort((a,b)=> b.score - a.score)
+    const suggestions = pairs.slice(0, maxPairs).map(p => ({ sourceId: p.sourceId, targetId: p.targetId, label: p.score.toFixed(2) }))
+
+    const created: any[] = []
+    if (commit && suggestions.length) {
+      // Deduplicate against existing edges
+      const existing = await (prisma as any).boardEdge.findMany({ where: { boardId: id } })
+      const exists = new Set(existing.map((e:any)=> `${e.sourceId}::${e.targetId}`))
+      for (const s of suggestions) {
+        const key1 = `${s.sourceId}::${s.targetId}`
+        const key2 = `${s.targetId}::${s.sourceId}`
+        if (exists.has(key1) || exists.has(key2)) continue
+        try {
+          const edge = await (prisma as any).boardEdge.create({ data: { boardId: id, sourceId: s.sourceId, targetId: s.targetId, label: s.label || null, style: null } })
+          created.push(edge)
+          exists.add(key1)
+        } catch {}
+        if (created.length >= maxPairs) break
+      }
+    }
+    res.json({ suggestions, created })
+  } catch (e) {
+    console.error('suggest-links failed', e)
+    res.status(500).json({ error: 'suggest_links_failed' })
+  }
+})
+
+// Cluster items and create group cards; apply simple auto-structurer
+app.post('/api/boards/:id/ai/cluster', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const oa = await getOpenAIFromReq(req)
+    if (!oa) return res.status(400).json({ error: 'openai_not_configured' })
+    const body = req.body || {}
+    const itemIds: string[] | undefined = Array.isArray(body.itemIds) ? body.itemIds.filter((x:any)=> typeof x === 'string' && x) : undefined
+    const items: any[] = await (prisma as any).boardItem.findMany({ where: { boardId: id, ...(itemIds ? { id: { in: itemIds } } : {}) } })
+    const movable = items.filter(it => it.type !== 'group')
+    if (movable.length < 2) return res.json({ groups: [], groupItems: [], updatedItems: [] })
+
+    const texts = movable.map(boardItemToText).map(t => t.slice(0, 4000))
+    const vecs = await embedTexts(oa, texts)
+    const n = movable.length
+    const k = Math.min(6, Math.max(2, Math.round(Math.sqrt(n/2))))
+    // k-means (basic)
+    const dims = (vecs[0] || []).length
+    let centroids: number[][] = []
+    // init with first k vectors (deterministic)
+    for (let i=0; i<k; i++) centroids.push([...vecs[i % n]])
+    let assign: number[] = new Array(n).fill(0)
+    for (let iter=0; iter<10; iter++) {
+      // assign
+      for (let i=0; i<n; i++) {
+        let best = 0, bestScore = -Infinity
+        for (let c=0; c<k; c++) {
+          const s = vecCosine(vecs[i] as any, centroids[c] as any)
+          if (s > bestScore) { bestScore = s; best = c }
+        }
+        assign[i] = best
+      }
+      // recompute centroids
+      const sum: number[][] = Array.from({ length: k }, () => new Array(dims).fill(0))
+      const count: number[] = new Array(k).fill(0)
+      for (let i=0; i<n; i++) {
+        const a = assign[i]
+        count[a]++
+        const v = vecs[i]
+        for (let d=0; d<dims; d++) sum[a][d] += v[d]
+      }
+      for (let c=0; c<k; c++) {
+        if (count[c] === 0) continue
+        for (let d=0; d<dims; d++) sum[c][d] /= count[c]
+      }
+      centroids = sum
+    }
+    // Build clusters
+    const clusters: { idx: number; items: any[]; texts: string[] }[] = Array.from({ length: k }, (_, idx) => ({ idx, items: [], texts: [] }))
+    for (let i=0; i<n; i++) { const a = assign[i]; clusters[a].items.push(movable[i]); clusters[a].texts.push(texts[i]) }
+    // Filter out empties
+    const nonEmpty = clusters.filter(c => c.items.length > 0)
+    // Fetch recent memory summaries for context (optional)
+    let memoryHints: string[] = []
+    try {
+      const memRows: any[] = await (prisma as any).vectorMemory.findMany({ where: { userId: req.user.id, boardId: id }, orderBy: { createdAt: 'desc' }, take: 12 })
+      memoryHints = memRows.map(m => m.summary).filter((s:any)=> typeof s === 'string' && s.trim()).slice(0, 12)
+    } catch {}
+    const memoryBlock = memoryHints.length ? `\nBoard memory hints:\n${memoryHints.map(t=> '- '+t).join('\n').slice(0, 1200)}` : ''
+    // Name clusters via LLM (short titles)
+    const titles: string[] = []
+    for (const c of nonEmpty) {
+      let title = ''
+      try {
+        const msg = `Return a 2-4 word title that describes this group of notes:\n\n${c.texts.slice(0,10).map(t=> '- '+t).join('\n')}${memoryBlock}`
+        const comp = await oa.chat.completions.create({ model: process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini', temperature: 0.3, max_tokens: 20, messages: [ { role: 'user', content: msg } ] as any })
+        title = (comp.choices?.[0]?.message?.content || '').replace(/^[#\s]+/, '').slice(0, 40)
+      } catch {}
+      titles.push(title || 'Group')
+    }
+    // Create group items & layout columns
+    const colW = 320, colH = 80, colGap = 80, rowGap = 40, startX = 60, startY = 60
+    const groupItems: any[] = []
+    let colX = startX
+    for (let gi=0; gi<nonEmpty.length; gi++) {
+      const g = nonEmpty[gi]
+      const grp = await (prisma as any).boardItem.create({ data: { boardId: id, type: 'group', x: colX, y: startY, w: colW, h: colH, z: 0, rotation: 0, content: { title: titles[gi] } } })
+      groupItems.push(grp)
+      colX += colW + colGap
+    }
+    // Position child items below each group in a column layout
+    const updatedItems: any[] = []
+    for (let gi=0; gi<nonEmpty.length; gi++) {
+      const g = nonEmpty[gi]
+      const baseX = groupItems[gi].x
+      let y = startY + colH + 20
+      for (const it of g.items) {
+        const nx = baseX
+        const ny = y
+        y += (it.h || 120) + rowGap
+        if (typeof nx === 'number' && typeof ny === 'number') {
+          try {
+            const upd = await (prisma as any).boardItem.update({ where: { id: it.id }, data: { x: nx, y: ny } })
+            updatedItems.push(upd)
+          } catch {}
+        }
+      }
+    }
+    const groupsOut = groupItems.map((g, idx) => ({ title: g.content?.title || titles[idx] || 'Group', itemIds: nonEmpty[idx]?.items.map(it=> it.id) || [] }))
+    res.json({ groups: groupsOut, groupItems, updatedItems })
+  } catch (e) {
+    console.error('cluster failed', e)
+    res.status(500).json({ error: 'cluster_failed' })
+  }
+})
+
+// =====================
+// Vector Memory API
+// =====================
+
+// Upsert (v1: append records; optional server-side embedding if text provided)
+app.post('/api/vector-memory/upsert', requireAuth, async (req: any, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : []
+    if (!items.length) return res.status(400).json({ error: 'invalid_body' })
+    const oa = await getOpenAIFromReq(req)
+    let created = 0
+    for (const it of items) {
+      const boardId = String(it.boardId || '')
+      if (!boardId) continue
+      const text: string | undefined = typeof it.text === 'string' ? it.text : undefined
+      let embedding: number[] | undefined = Array.isArray(it.embedding) ? it.embedding : undefined
+      if (!embedding && text && oa) {
+        try { const r = await oa.embeddings.create({ model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small', input: text.slice(0, 8000) }); embedding = (r.data?.[0]?.embedding as any) || undefined } catch {}
+      }
+      if (!embedding) continue
+      try {
+        await (prisma as any).vectorMemory.create({ data: {
+          userId: req.user.id,
+          boardId,
+          kind: String(it.kind || 'card'),
+          topic: String(it.topic || ''),
+          summary: String(it.summary || ''),
+          importance: Number(it.importance ?? 0),
+          embedding,
+          payload: it.payload ?? {}
+        } })
+        created++
+      } catch {}
+    }
+    res.json({ ok: true, count: created })
+  } catch (e) {
+    res.status(500).json({ error: 'upsert_failed' })
+  }
+})
+
+// Search within a board by query text using cosine similarity (naive, in-app)
+app.get('/api/vector-memory/search', requireAuth, async (req: any, res) => {
+  try {
+    const boardId = String(req.query.boardId || req.query.board || '')
+    const k = Math.max(1, Math.min(50, Number(req.query.k || 5)))
+    const query = String(req.query.query || req.query.q || '')
+    if (!boardId || !query) return res.status(400).json({ error: 'invalid_query' })
+    const oa = await getOpenAIFromReq(req)
+    if (!oa) return res.status(400).json({ error: 'openai_not_configured' })
+    const qEmb = await oa.embeddings.create({ model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small', input: query.slice(0, 8000) })
+    const qv = (qEmb.data?.[0]?.embedding as number[]) || []
+    const rows: any[] = await (prisma as any).vectorMemory.findMany({ where: { userId: req.user.id, boardId }, orderBy: { createdAt: 'desc' }, take: 1000 })
+    const scored = rows.map(r => ({ row: r, score: vecCosine(qv as any, (r.embedding || []) as any) }))
+    scored.sort((a,b)=> b.score - a.score)
+    res.json({ items: scored.slice(0, k).map(s => ({ ...s.row, score: s.score })) })
+  } catch (e) {
+    res.status(500).json({ error: 'search_failed' })
+  }
+})
+
+// Convenience aliases scoped to board
+app.post('/api/boards/:id/memory/upsert', requireAuth, async (req: any, res) => {
+  req.body = req.body || {}
+  const id = req.params.id
+  const items = Array.isArray(req.body.items) ? req.body.items.map((x:any)=> ({ ...x, boardId: id })) : []
+  req.body.items = items
+  return (app as any).handle?.(req, res) || res.status(500).json({ error: 'router_not_supported' })
+})
+app.get('/api/boards/:id/memory/search', requireAuth, async (req: any, res) => {
+  const id = req.params.id
+  const q = req.query.query || req.query.q
+  const k = req.query.k
+  // Proxy to the generic search endpoint
+  ;(req as any).url = `/api/vector-memory/search?boardId=${encodeURIComponent(id)}&query=${encodeURIComponent(String(q||''))}&k=${encodeURIComponent(String(k||5))}`
+  return (app as any).handle?.(req, res) || res.status(500).json({ error: 'router_not_supported' })
+})
+
+// ==============
+// Export helpers
+// ==============
+app.get('/api/boards/:id/export.json', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const [items, edges] = await Promise.all([
+      (prisma as any).boardItem.findMany({ where: { boardId: id } }),
+      (prisma as any).boardEdge.findMany({ where: { boardId: id } })
+    ])
+    res.json({ board, items, edges })
+  } catch (e) { res.status(500).json({ error: 'export_failed' }) }
 })
 
 // --- AI Actions ---

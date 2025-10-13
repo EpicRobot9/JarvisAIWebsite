@@ -810,3 +810,28 @@ export async function saveAIProfile(p: { name?: string; tone?: string; style?: s
   const r = await fetch('/api/ai/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(p) })
   if (!r.ok) throw new AppError('router_failed', `Save AI profile failed ${r.status}: ${r.statusText}`, await safeText(r))
 }
+
+// New AI helpers: suggest-links and cluster
+export async function aiSuggestLinks(boardId: string, itemIds?: string[], commit: boolean = true): Promise<{ suggestions: Array<{ sourceId: string; targetId: string; label?: string }>; created: BoardEdge[] }>{
+  const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+  const userOpenAI = (localStorage.getItem('user_openai_api_key') || '').trim()
+  if (userOpenAI) headers['x-openai-key'] = userOpenAI
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ai/suggest-links`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ itemIds, commit }) })
+  if (!r.ok) throw new AppError('router_failed', `Suggest links failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function aiCluster(boardId: string, itemIds?: string[]): Promise<{ groups: Array<{ title: string; itemIds: string[] }>; groupItems: BoardItem[]; updatedItems: BoardItem[] }>{
+  const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+  const userOpenAI = (localStorage.getItem('user_openai_api_key') || '').trim()
+  if (userOpenAI) headers['x-openai-key'] = userOpenAI
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ai/cluster`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ itemIds }) })
+  if (!r.ok) throw new AppError('router_failed', `Cluster failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function exportBoardJson(boardId: string): Promise<{ board: Board; items: BoardItem[]; edges: BoardEdge[] }>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/export.json`, { credentials: 'include' })
+  if (!r.ok) throw new AppError('router_failed', `Export failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}

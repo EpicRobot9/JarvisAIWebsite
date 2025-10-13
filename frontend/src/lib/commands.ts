@@ -10,6 +10,21 @@ export type VoiceMacroCommand =
   | { type: 'bookmark'; label?: string }
   | { type: 'repeat' }
 
+// Boards voice commands
+export type BoardCommand =
+  | { type: 'create_note'; text?: string }
+  | { type: 'suggest_links' }
+  | { type: 'cluster' }
+  | { type: 'link_selected' }
+  | { type: 'unlink_selected' }
+  | { type: 'summarize_selection' }
+  | { type: 'diagram_selection' }
+  | { type: 'clear_selection' }
+  | { type: 'select_all' }
+  | { type: 'fit_view' }
+  | { type: 'zoom_in' }
+  | { type: 'zoom_out' }
+
 // Normalize user text for matching
 function norm(s: string) {
   return (s || '')
@@ -69,5 +84,40 @@ export function parseVoiceMacro(input: string): VoiceMacroCommand | null {
   if (m && m[1]) {
     return { type: 'bookmark', label: m[1].trim() }
   }
+  return null
+}
+
+/** Detects board commands like "new note", "cluster", "suggest links", etc. */
+export function parseBoardCommand(input: string): BoardCommand | null {
+  const t = norm(input)
+  if (!t) return null
+
+  // Create note with optional content
+  // e.g., "create note", "new note", "make a note hello world"
+  if (/^(create|make|add) (a )?note( .+)?$/.test(t) || /^(new|another) note( .+)?$/.test(t)) {
+    const m = t.match(/^(?:create|make|add|new|another) (?:a )?note(?: (.*))?$/)
+    const content = (m && m[1] && m[1].trim()) || undefined
+    return { type: 'create_note', text: content }
+  }
+
+  // AI actions
+  if (/(^|\b)(suggest links|auto link|link suggestions)(\b|$)/.test(t)) return { type: 'suggest_links' }
+  if (/(^|\b)(cluster|auto layout|group similar)(\b|$)/.test(t)) return { type: 'cluster' }
+  if (/(^|\b)(summarize selection|summary note)(\b|$)/.test(t)) return { type: 'summarize_selection' }
+  if (/(^|\b)(diagram selection|make diagram|create diagram)(\b|$)/.test(t)) return { type: 'diagram_selection' }
+
+  // Linking
+  if (/(^|\b)(link selected|link selection)(\b|$)/.test(t)) return { type: 'link_selected' }
+  if (/(^|\b)(unlink selected|remove link|unlink selection)(\b|$)/.test(t)) return { type: 'unlink_selected' }
+
+  // Selection helpers
+  if (/(^|\b)(clear selection|deselect all|clear all)(\b|$)/.test(t)) return { type: 'clear_selection' }
+  if (/(^|\b)(select all|highlight all)(\b|$)/.test(t)) return { type: 'select_all' }
+
+  // View helpers
+  if (/(^|\b)(fit|fit view|zoom to fit)(\b|$)/.test(t)) return { type: 'fit_view' }
+  if (/(^|\b)(zoom in|increase zoom)(\b|$)/.test(t)) return { type: 'zoom_in' }
+  if (/(^|\b)(zoom out|decrease zoom)(\b|$)/.test(t)) return { type: 'zoom_out' }
+
   return null
 }

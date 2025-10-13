@@ -60,6 +60,7 @@ The Settings modal groups options into collapsible sections to keep things tidy 
    - Enable/disable Spacebar push‑to‑talk (global)
    - Mode: Hold (press and hold to talk) or Toggle (tap to start/stop)
    - Play chime on start/stop (uses Wake Chime preset/volume)
+   - Boards: Spacebar PTT is off by default to avoid conflict with Space+drag pan. You can still hold the on‑screen mic button in Boards to talk. To opt‑in Spacebar PTT globally (including Boards), set `ux_space_ptt_enabled=true`.
 
 ## Persistence keys (reference)
 

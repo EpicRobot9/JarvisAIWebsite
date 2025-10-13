@@ -251,8 +251,8 @@ export function useCallSession(opts: { userId: string | undefined; sessionId: st
   // Space PTT
   useEffect(()=>{
     // Respect settings toggle for Spacebar PTT
-    let enabled = true
-    try { enabled = JSON.parse(localStorage.getItem('ux_space_ptt_enabled') || 'true') } catch {}
+    let enabled = false
+    try { enabled = JSON.parse(localStorage.getItem('ux_space_ptt_enabled') || 'false') } catch {}
     if (!enabled) return
     const down = (e: KeyboardEvent)=>{
       if (e.code !== 'Space') return
