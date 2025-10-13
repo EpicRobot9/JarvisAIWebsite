@@ -1797,6 +1797,114 @@ async function getNotesTextForUser(userId: string, noteIds: string[] | undefined
   }
 }
 
+// Simple fallback generators when OpenAI is not configured
+function truncate(str: string, max: number): string {
+  if (!str) return ''
+  if (str.length <= max) return str
+  return str.slice(0, max - 1) + '…'
+}
+function splitSentences(text: string): string[] {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9])/)
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+function extractTermPairs(text: string): Array<{ left: string; right: string }> {
+  const pairs: Array<{ left: string; right: string }> = []
+  for (const line of (text || '').split(/\n+/)) {
+    const m = line.match(/^\s*([^:]{2,}):\s*(.+)$/)
+    if (m) pairs.push({ left: m[1].trim(), right: m[2].trim() })
+  }
+  return pairs
+}
+function buildSimpleGuide(subject: string, info: string, notesText: string): string {
+  const base = (info || notesText || '').trim()
+  const subjectLine = subject ? `Subject: ${subject}` : ''
+  const overview = [subjectLine, truncate(base, 1200)].filter(Boolean).join('\n\n')
+  const sentences = splitSentences(base)
+  const keyPoints = sentences.slice(0, 8).map(s => `- ${truncate(s, 180)}`).join('\n')
+  const questions = [
+    subject ? `- What is ${subject}?` : '- What are the core ideas?',
+    '- Can you explain the key terms?',
+    '- Provide a real-world example.',
+    '- Summarize the topic in 2-3 sentences.'
+  ].join('\n')
+  const summary = truncate(sentences.slice(0, 3).join(' '), 600)
+  return [
+    '---SECTION---',
+    '# Overview',
+    overview,
+    '',
+    '---SECTION---',
+    '# Key Concepts',
+    keyPoints || '- (Add more details in your notes)',
+    '',
+    '---SECTION---',
+    '# Practice Questions',
+    questions,
+    '',
+    '---SECTION---',
+    '# Summary',
+    summary || 'This guide was generated using a local fallback. Add specifics as needed.'
+  ].join('\n')
+}
+function buildSimpleFlashcards(subject: string, info: string, notesText: string, target = 12): Array<{ front: string; back: string }> {
+  const cards: Array<{ front: string; back: string }> = []
+  const pairs = extractTermPairs(info + '\n' + notesText)
+  for (const p of pairs) {
+    if (cards.length >= target) break
+    cards.push({ front: p.left, back: p.right })
+  }
+  if (cards.length < Math.max(6, Math.floor(target / 2))) {
+    // Fallback: derive Q&A from sentences
+    const sentences = splitSentences(info || notesText)
+    for (const s of sentences) {
+      if (cards.length >= target) break
+      const q = subject ? `What about ${subject}:` : 'Explain:'
+      cards.push({ front: `${q} ${truncate(s, 120)}`, back: s })
+    }
+  }
+  // Ensure minimal number
+  while (cards.length < Math.min(target, 12)) {
+    const idx = cards.length + 1
+    cards.push({ front: subject ? `${subject} – Fact ${idx}` : `Key Fact ${idx}`, back: 'Add your own detail here.' })
+  }
+  return cards.slice(0, target)
+}
+function buildSimpleTest(subject: string, info: string, notesText: string, count = 8): Array<{ question: string; choices: string[]; answerIndex: number }> {
+  const out: Array<{ question: string; choices: string[]; answerIndex: number }> = []
+  const sentences = splitSentences(info || notesText)
+  const baseQ = subject ? `${subject}:` : 'Topic'
+  for (let i = 0; i < Math.min(count, sentences.length); i++) {
+    const s = truncate(sentences[i], 140)
+    const correct = s
+    const wrongs = [
+      'Not applicable',
+      'Unrelated detail',
+      'All of the above'
+    ]
+    const choices = [correct, ...wrongs].slice(0, 4)
+    out.push({ question: `Which is true about ${baseQ}`, choices, answerIndex: 0 })
+  }
+  while (out.length < count) {
+    const idx = out.length + 1
+    out.push({ question: `Select the accurate statement (${idx})`, choices: ['Placeholder A', 'Placeholder B', 'Placeholder C', 'Placeholder D'], answerIndex: 0 })
+  }
+  return out
+}
+function buildSimpleMatch(subject: string, info: string, notesText: string, count = 10): Array<{ left: string; right: string }> {
+  const pairs = extractTermPairs(info + '\n' + notesText)
+  if (pairs.length >= 4) return pairs.slice(0, count)
+  const out: Array<{ left: string; right: string }> = []
+  const sentences = splitSentences(info || notesText)
+  for (let i = 0; i < Math.min(count, sentences.length); i++) {
+    out.push({ left: subject ? `${subject} ${i + 1}` : `Item ${i + 1}`, right: truncate(sentences[i], 120) })
+  }
+  while (out.length < Math.min(count, 10)) out.push({ left: `Term ${out.length + 1}`, right: 'Definition placeholder' })
+  return out
+}
+
 // POST /api/study/generate -> creates a StudySet row
 app.post('/api/study/generate', requireAuth, async (req: any, res) => {
   try {
@@ -1822,14 +1930,37 @@ app.post('/api/study/generate', requireAuth, async (req: any, res) => {
     const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
     const dbKey = await getSettingValue('OPENAI_API_KEY')
     const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
-    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
 
-    const oa = new OpenAI({ apiKey })
     // Build instructions for generation
     const wantGuide = tools.includes('guide')
     const wantFlash = tools.includes('flashcards')
     const wantTest = tools.includes('test')
     const wantMatch = tools.includes('match')
+
+    // Fallback path: if no API key, generate a simple local study set instead of failing
+    if (!apiKey) {
+      const content: any = {}
+      if (wantGuide) content.guide = buildSimpleGuide(subject, info, notesText)
+      if (wantFlash) content.flashcards = buildSimpleFlashcards(subject, info, notesText, 12)
+      if (wantTest) content.test = buildSimpleTest(subject, info, notesText, 8)
+      if (wantMatch) content.match = buildSimpleMatch(subject, info, notesText, 10)
+
+      // Save StudySet with fallback content
+      const row = await (prisma as any).studySet.create({
+        data: {
+          userId: req.user.id,
+          title,
+          subject: subject || null,
+          sourceText: source,
+          tools: tools as any,
+          linkedNoteIds: noteIds,
+          content
+        }
+      })
+      return res.json({ ok: true, set: row, warning: 'openai_not_configured_fallback' })
+    }
+
+    const oa = new OpenAI({ apiKey })
     const system = 'You are a helpful study assistant. Given source material, produce structured study artifacts in strict JSON. Do not include explanations outside of JSON.'
   const userPrompt = `Source material:\n\n${source}\n\nProduce a JSON object with up to these keys depending on the request: guide, flashcards, test, match.\n- guide: markdown string. MUST use explicit section markers of the form:\n---SECTION---\n# Title of Section\nContent...\nEach major section MUST begin with the line ---SECTION--- followed by a level-1 heading (#). Provide logical sections (Introduction, Key Concepts, Practical Examples, Practice Questions, Summary, etc.) so a parser can split on the markers easily.\n- flashcards: array of { front: string, back: string }. 12-30 cards depending on material.\n- test: array of multiple-choice questions; each as { question: string, choices: string[4], answerIndex: 0-3 }. 8-20 questions.\n- match: array of pairs { left: string, right: string } for term-definition matching (8-20 pairs).\nKeep content appropriate and based only on provided material. Avoid fabricating details.`
     const toolList = [ wantGuide && 'guide', wantFlash && 'flashcards', wantTest && 'test', wantMatch && 'match' ].filter(Boolean).join(', ')

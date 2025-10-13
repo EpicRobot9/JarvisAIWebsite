@@ -211,9 +211,13 @@ if [[ -z "$ADMIN_NAMES" ]]; then ADMIN_NAMES="admin"; fi
 SEED_MODE=$(grep -E '^ADMIN_SEED_MODE=' "$DIR_ROOT/.env" 2>/dev/null | cut -d= -f2-)
 ADMIN_PASS=$(grep -E '^ADMIN_DEFAULT_PASSWORD=' "$DIR_ROOT/.env" 2>/dev/null | cut -d= -f2-)
 echo "Admin user(s): ${ADMIN_NAMES}"
-if [[ "$SEED_MODE" == "reset" && -n "$ADMIN_PASS" ]]; then
-  echo "Admin password: ${ADMIN_PASS} (from ADMIN_DEFAULT_PASSWORD; SEED reset)"
+if [[ -n "$ADMIN_PASS" ]]; then
+  if [[ "$SEED_MODE" == "reset" ]]; then
+    echo "Admin password: ${ADMIN_PASS} (from ADMIN_DEFAULT_PASSWORD; SEED reset)"
+  else
+    echo "Admin password: ${ADMIN_PASS} (from ADMIN_DEFAULT_PASSWORD; seed mode: ${SEED_MODE:-ensure})"
+  fi
 else
-  echo "Admin password: unchanged (seed mode: ${SEED_MODE:-ensure}). Use --admin-reset once|always to set."
+  echo "Admin password: unknown (seed mode: ${SEED_MODE:-ensure}). Use --admin-reset once|always to set."
 fi
 echo "----------------------\n"
