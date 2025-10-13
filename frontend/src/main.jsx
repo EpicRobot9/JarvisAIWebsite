@@ -15,6 +15,7 @@ import NotesSettings from './pages/NotesSettings'
 import StudyDashboard from './pages/StudyDashboard'
 import StudySetView from './pages/StudySetView'
 import FlashcardsGame from './pages/FlashcardsGame'
+import FlashcardsView from './pages/FlashcardsView'
 import TestMode from './pages/TestMode'
 import MatchGame from './pages/MatchGame'
 import ImportPage from './pages/Import'
@@ -45,7 +46,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/study" element={<StudyDashboard />} />
           <Route path="/study/sets/:id" element={<StudySetView />} />
           <Route path="/study/sets/:id/enhanced" element={<EnhancedStudyGuideView />} />
-          <Route path="/study/sets/:id/flashcards" element={<FlashcardsGame />} />
+          <Route path="/study/sets/:id/flashcards" element={<FlashcardsView />} />
+          <Route path="/study/sets/:id/study" element={<FlashcardsGame />} />
+          {/* Legacy route redirect */}
+          <Route path="/study/sets/:id/cards" element={<Navigate to="../flashcards" replace />} />
           <Route path="/study/sets/:id/test" element={<TestMode />} />
           <Route path="/study/sets/:id/match" element={<MatchGame />} />
           <Route path="/import" element={<ImportPage />} />

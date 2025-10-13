@@ -8,6 +8,24 @@ type Props = {
 
 const SECURE_CONFIG = { startOnLoad: false, securityLevel: 'strict' as const }
 
+function sanitizeMermaidInput(src: string): string {
+  // Quick guard: if it looks like plain text lines without a known mermaid keyword, wrap as flowchart with quoted labels
+  const hasKeyword = /(graph|flowchart|sequenceDiagram|classDiagram|erDiagram|stateDiagram)/.test(src)
+  if (!hasKeyword) {
+    const lines = src.split(/\n+/).filter(Boolean)
+    // Create a simple top-down flow from lines, escaping quotes
+    const nodes = lines.map((l, i) => `N${i}[${l.replace(/"/g, '\\"')}]`)
+    const edges = nodes.map((n, i) => (i < nodes.length - 1 ? `${n} --> N${i+1}` : n))
+    return `flowchart TD\n${edges.join('\n')}`
+  }
+  // Escape double quotes inside bracket labels to avoid parser errors
+  // Example: A[Start: Origin of "Epic"]
+  return src.replace(/\[(.*?)\]/g, (m, p1) => {
+    const safe = String(p1).replace(/"/g, '\\"')
+    return `[${safe}]`
+  })
+}
+
 export default function Mermaid({ chart, theme = 'dark' }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const svgWrapRef = useRef<HTMLDivElement | null>(null)
@@ -26,9 +44,10 @@ export default function Mermaid({ chart, theme = 'dark' }: Props) {
     if (!el) return
     setError(null)
     const id = `mmd-${Math.random().toString(36).slice(2)}`
+    const safeChart = sanitizeMermaidInput(chart)
     ;(async () => {
       try {
-        const { svg } = await mermaid.render(id, chart)
+        const { svg } = await mermaid.render(id, safeChart)
         if (mounted) el.innerHTML = svg
       } catch (e: any) {
         if (mounted) setError(e?.message || 'Failed to render diagram')

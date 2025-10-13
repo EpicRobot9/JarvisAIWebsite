@@ -125,7 +125,10 @@ export default function EnhancedStudyGuideView() {
       // if recent save happened <400ms ago and not immediate, postpone one more cycle
       if (!opts.immediate && Date.now() - lastBatchedAt < 400) return
       try {
-        const p = await replaceStudyProgress(id, pendingSections || progress.sectionsCompleted, { timeSpent: opts.timeSpent ?? progress.timeSpent, bookmarks: pendingBookmarks || progress.bookmarks })
+        // Only include bookmarks in payload if we have an explicit pending value; otherwise skip to avoid overwriting server state (e.g., from toggle endpoint)
+        const payload: { timeSpent?: number; bookmarks?: string[] } = { timeSpent: opts.timeSpent ?? progress.timeSpent }
+        if (pendingBookmarks !== null) payload.bookmarks = pendingBookmarks
+        const p = await replaceStudyProgress(id, pendingSections || progress.sectionsCompleted, payload)
         setProgress(p)
         setLastBatchedAt(Date.now())
         setDirty(false)
@@ -264,7 +267,7 @@ export default function EnhancedStudyGuideView() {
                 if (!res.ok) throw new Error('Bookmark toggle failed')
                 const data = await res.json()
                 if (data?.progress) setProgress(prev => prev ? { ...prev, bookmarks: data.progress.bookmarks || [] } : prev)
-                queueProgressSave()
+                // Do not queue a progress save here to avoid overwriting bookmarks with stale state
               } catch (e:any) {
                 // rollback
                 setProgress(p => p ? { ...p, bookmarks: p.bookmarks.includes(sectionId) ? p.bookmarks.filter(b=>b!==sectionId) : [...p.bookmarks, sectionId] } : p)

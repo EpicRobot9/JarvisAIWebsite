@@ -77,11 +77,11 @@ export default function FlashcardsGame() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="p-4 border-b border-slate-800 flex items-center gap-3">
-        <Link to={`/study/sets/${id}/enhanced`} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
+        <Link to={`/study/sets/${id}/flashcards`} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
         <div className="font-medium">Flashcards Game</div>
         {linkedStudyGuideId && (
           <Link 
-            to={`/study/sets/${linkedStudyGuideId}/enhanced`} 
+            to={`/study/sets/${linkedStudyGuideId}`} 
             className="px-3 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm"
             title="View source study guide"
           >

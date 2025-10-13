@@ -28,10 +28,12 @@ export default function FlashcardsView() {
 
   if (!id) return null
 
+  const backHref = linkedStudyGuideId ? `/study/sets/${linkedStudyGuideId}` : '/study'
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="p-4 border-b border-slate-800 flex items-center gap-3">
-  <Link to={`/study/sets/${id}/enhanced`} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
+    <div className="p-4 border-b border-slate-800 flex items-center gap-3">
+  <Link to={backHref} className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Back</Link>
         <div className="font-medium">{setData?.title || 'Flash Cards'}</div>
         {linkedStudyGuideId && (
           <Link 
@@ -43,7 +45,7 @@ export default function FlashcardsView() {
           </Link>
         )}
         <div className="ml-auto">
-          <Link to={`/study/sets/${id}/flashcards`} className="px-3 py-2 rounded-md bg-pink-600 hover:bg-pink-500 text-white text-sm">Study Mode</Link>
+          <Link to={`/study/sets/${id}/study`} className="px-3 py-2 rounded-md bg-pink-600 hover:bg-pink-500 text-white text-sm">Study Mode</Link>
         </div>
       </div>
 
