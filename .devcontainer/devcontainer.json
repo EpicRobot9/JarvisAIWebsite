@@ -4,7 +4,7 @@
   "hostRequirements": {
     "cpus": 4,
     "memory": "16gb",
-    "storage": "64gb"
+    "storage": "65gb"
   },
   "workspaceFolder": "/workspaces/JarvisAIWebsite",
   "remoteUser": "node",
