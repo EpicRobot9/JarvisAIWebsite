@@ -1063,6 +1063,335 @@ app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
   res.json(users)
 })
 
+// ========================
+// AI Boards: CRUD & Agent
+// ========================
+
+// Create a board
+app.post('/api/boards', requireAuth, async (req: any, res) => {
+  try {
+    const title = (req.body?.title || 'Untitled Board').toString().slice(0, 120)
+    const viewport = { x: 0, y: 0, zoom: 1 }
+    const board = await (prisma as any).board.create({ data: { userId: req.user.id, title, viewport } })
+    res.json({ board })
+  } catch (e) {
+    res.status(500).json({ error: 'create_failed' })
+  }
+})
+
+// List boards
+app.get('/api/boards', requireAuth, async (req: any, res) => {
+  try {
+    const take = Math.min(Math.max(Number(req.query.take || 50), 1), 200)
+    const cursor = (req.query.cursor as string | undefined) || undefined
+    const items = await (prisma as any).board.findMany({
+      where: { userId: req.user.id },
+      orderBy: { createdAt: 'desc' },
+      take,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {})
+    })
+    res.json({ items, nextCursor: items.length === take ? items[items.length - 1]?.id : null })
+  } catch (e) {
+    res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// Get a single board with items/edges
+app.get('/api/boards/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const [items, edges] = await Promise.all([
+      (prisma as any).boardItem.findMany({ where: { boardId: id } }),
+      (prisma as any).boardEdge.findMany({ where: { boardId: id } })
+    ])
+    res.json({ board, items, edges })
+  } catch (e) {
+    res.status(500).json({ error: 'read_failed' })
+  }
+})
+
+// Patch board
+app.patch('/api/boards/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const existing = await (prisma as any).board.findUnique({ where: { id } })
+    if (!existing || existing.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const data: any = {}
+    if (typeof req.body?.title === 'string') data.title = req.body.title.slice(0, 200)
+    if (req.body?.viewport && typeof req.body.viewport === 'object') data.viewport = req.body.viewport
+    if (!Object.keys(data).length) return res.status(400).json({ error: 'no_changes' })
+    const board = await (prisma as any).board.update({ where: { id }, data })
+    res.json({ board })
+  } catch (e) {
+    res.status(500).json({ error: 'update_failed' })
+  }
+})
+
+// Delete board
+app.delete('/api/boards/:id', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const existing = await (prisma as any).board.findUnique({ where: { id } })
+    if (!existing || existing.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    await (prisma as any).boardEdge.deleteMany({ where: { boardId: id } }).catch(()=>{})
+    await (prisma as any).boardItem.deleteMany({ where: { boardId: id } }).catch(()=>{})
+    await (prisma as any).board.delete({ where: { id } })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: 'delete_failed' })
+  }
+})
+
+// Create item
+app.post('/api/boards/:id/items', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const body = req.body || {}
+    const item = await (prisma as any).boardItem.create({ data: {
+      boardId: id,
+      type: String(body.type || 'note'),
+      x: Number(body.x ?? 0),
+      y: Number(body.y ?? 0),
+      w: Number(body.w ?? 240),
+      h: Number(body.h ?? 120),
+      z: Number(body.z ?? 0),
+      rotation: Number(body.rotation ?? 0),
+      content: body.content || {}
+    } })
+    res.json({ item })
+  } catch (e) {
+    res.status(500).json({ error: 'create_failed' })
+  }
+})
+
+// Patch item
+app.patch('/api/boards/:id/items/:itemId', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const itemId = req.params.itemId
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const data: any = {}
+    for (const k of ['x','y','w','h','z','rotation']) {
+      if (req.body?.[k] != null) data[k] = Number(req.body[k])
+    }
+    if (req.body?.type) data.type = String(req.body.type)
+    if (req.body?.content && typeof req.body.content === 'object') data.content = req.body.content
+    if (!Object.keys(data).length) return res.status(400).json({ error: 'no_changes' })
+    const item = await (prisma as any).boardItem.update({ where: { id: itemId }, data })
+    res.json({ item })
+  } catch (e) {
+    res.status(500).json({ error: 'update_failed' })
+  }
+})
+
+// Delete item
+app.delete('/api/boards/:id/items/:itemId', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const itemId = req.params.itemId
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    await (prisma as any).boardItem.delete({ where: { id: itemId } })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: 'delete_failed' })
+  }
+})
+
+// Create edge
+app.post('/api/boards/:id/edges', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const body = req.body || {}
+    const edge = await (prisma as any).boardEdge.create({ data: { boardId: id, sourceId: String(body.sourceId||''), targetId: String(body.targetId||''), label: typeof body.label==='string'? body.label: null, style: body.style || null } })
+    res.json({ edge })
+  } catch (e) {
+    res.status(500).json({ error: 'create_failed' })
+  }
+})
+
+// Delete edge
+app.delete('/api/boards/:id/edges/:edgeId', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const edgeId = req.params.edgeId
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    await (prisma as any).boardEdge.delete({ where: { id: edgeId } })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: 'delete_failed' })
+  }
+})
+
+// --- AI Actions ---
+// Structure board from prompt
+app.post('/api/boards/:id/ai/structure', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const prompt = (req.body?.prompt || '').toString().trim()
+    if (!prompt) return res.status(400).json({ error: 'missing_prompt' })
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+    const oa = new OpenAI({ apiKey })
+    const system = 'You create a planning board as JSON items: groups (columns) and notes/checklists with concise content and approximate positions (x,y,w,h). Keep values reasonable. '
+    const msg = `Topic: ${prompt}. Return an array named items with objects like { type, content, x, y, w, h } where type is 'group'|'note'|'checklist'.`
+    const r = await oa.chat.completions.create({ model: 'gpt-4o-mini', temperature: 0.2, response_format: { type: 'json_object' } as any, messages: [ { role: 'system', content: system }, { role: 'user', content: msg } ] as any, max_tokens: 900 })
+    let out: any = {}
+    try { out = JSON.parse(r.choices?.[0]?.message?.content || '{}') } catch {}
+    const itemsIn = Array.isArray(out.items) ? out.items : []
+    const toCreate = itemsIn.slice(0, 60).map((it: any) => ({
+      boardId: id,
+      type: typeof it.type === 'string' ? it.type : 'note',
+      x: Number(it.x ?? 40), y: Number(it.y ?? 40), w: Number(it.w ?? 240), h: Number(it.h ?? 120), z: 0, rotation: 0,
+      content: typeof it.content === 'object' ? it.content : { text: String(it.text || '') }
+    }))
+    const created: any[] = []
+    for (const chunk of toCreate) {
+      try { created.push(await (prisma as any).boardItem.create({ data: chunk })) } catch {}
+    }
+    res.json({ items: created })
+  } catch (e) {
+    res.status(500).json({ error: 'structure_failed' })
+  }
+})
+
+// Summarize selection into a note
+app.post('/api/boards/:id/ai/summarize', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const itemIds: string[] = Array.isArray(req.body?.itemIds) ? req.body.itemIds.filter((x:any)=> typeof x === 'string' && x) : []
+    if (!itemIds.length) return res.status(400).json({ error: 'missing_items' })
+    const board = await (prisma as any).board.findUnique({ where: { id } })
+    if (!board || board.userId !== req.user.id) return res.status(404).json({ error: 'not_found' })
+    const items = await (prisma as any).boardItem.findMany({ where: { boardId: id, id: { in: itemIds } } })
+    const text = items.map((it:any)=>{
+      const c = it.content || {}
+      if (it.type === 'note') return String(c.text || '')
+      if (it.type === 'checklist') return (Array.isArray(c.items)? c.items:[]).map((ci:any)=> `- ${ci.text}${ci.done?' [x]':''}`).join('\n')
+      if (it.type === 'link') return `${c.title||c.url||''} ${c.desc||''}`
+      return ''
+    }).filter(Boolean).join('\n')
+    if (!text.trim()) return res.status(400).json({ error: 'empty_selection' })
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+    const oa = new OpenAI({ apiKey })
+    const r = await oa.chat.completions.create({ model: 'gpt-4o-mini', temperature: 0.2, messages: [
+      { role: 'system', content: 'Summarize concisely into 5-8 bullets. Use Markdown.' },
+      { role: 'user', content: text.slice(0, 8000) }
+    ] as any, max_tokens: 400 })
+    const noteText = r.choices?.[0]?.message?.content || ''
+    const item = await (prisma as any).boardItem.create({ data: { boardId: id, type: 'note', x: 40, y: 40, w: 320, h: 200, z: 0, rotation: 0, content: { text: noteText } } })
+    res.json({ note: { text: noteText }, item })
+  } catch (e) {
+    res.status(500).json({ error: 'summarize_failed' })
+  }
+})
+
+// Diagram from selection
+app.post('/api/boards/:id/ai/diagram', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const itemIds: string[] = Array.isArray(req.body?.itemIds) ? req.body.itemIds.filter((x:any)=> typeof x === 'string' && x) : []
+    const type = (req.body?.type || 'flowchart').toString()
+    if (!itemIds.length) return res.status(400).json({ error: 'missing_items' })
+    const items = await (prisma as any).boardItem.findMany({ where: { boardId: id, id: { in: itemIds } } })
+    const text = items.map((it:any)=>{
+      const c = it.content || {}
+      if (it.type === 'note') return String(c.text || '')
+      if (it.type === 'checklist') return (Array.isArray(c.items)? c.items:[]).map((ci:any)=> ci.text).join('; ')
+      if (it.type === 'link') return `${c.title||c.url||''} ${c.desc||''}`
+      return ''
+    }).filter(Boolean).join('\n')
+    // Delegate to existing diagram endpoint
+    // We call directly here to avoid extra fetch; replicate implementation
+    const headerKey = (req.headers['x-openai-key'] as string | undefined)?.trim()
+    const dbKey = await getSettingValue('OPENAI_API_KEY')
+    const apiKey = headerKey || dbKey || process.env.OPENAI_API_KEY
+    if (!apiKey) return res.status(400).json({ error: 'openai_not_configured' })
+    const oa = new OpenAI({ apiKey })
+    const typeInstructions: Record<string, string> = {
+      flowchart: 'Create a flowchart diagram showing process flow and decisions.',
+      sequence: 'Create a sequence diagram showing interactions over time.',
+      class: 'Create a class diagram showing classes and relations.',
+      er: 'Create an ER diagram showing entities and relations.',
+      state: 'Create a state diagram showing states and transitions.'
+    }
+    const system = `Generate Mermaid ${type}. ${typeInstructions[type]||''} Return ONLY the diagram code.`
+    const completion = await oa.chat.completions.create({ model: process.env.TRANSCRIBE_MODEL || 'gpt-4o-mini', temperature: 0.3, max_tokens: 500, messages: [ { role: 'system', content: system }, { role: 'user', content: text.slice(0,8000) } ] as any })
+    let mermaid = (completion.choices?.[0]?.message?.content || '').trim()
+    if (mermaid.startsWith('```')) mermaid = mermaid.replace(/^```mermaid\n?/, '').replace(/^```\n?/, '').replace(/\n?```$/, '').trim()
+    const item = await (prisma as any).boardItem.create({ data: { boardId: id, type: 'note', x: 80, y: 80, w: 360, h: 240, z: 0, rotation: 0, content: { mermaid, type } } })
+    res.json({ mermaid, item })
+  } catch (e) {
+    res.status(500).json({ error: 'diagram_failed' })
+  }
+})
+
+// Flashcards from selection
+app.post('/api/boards/:id/ai/flashcards', requireAuth, async (req: any, res) => {
+  try {
+    const id = req.params.id
+    const itemIds: string[] = Array.isArray(req.body?.itemIds) ? req.body.itemIds.filter((x:any)=> typeof x === 'string' && x) : []
+    const title = (req.body?.title || '').toString()
+    if (!itemIds.length) return res.status(400).json({ error: 'missing_items' })
+    const items = await (prisma as any).boardItem.findMany({ where: { boardId: id, id: { in: itemIds } } })
+    const text = items.map((it:any)=>{
+      const c = it.content || {}
+      if (it.type === 'note') return String(c.text || '')
+      if (it.type === 'checklist') return (Array.isArray(c.items)? c.items:[]).map((ci:any)=> `- ${ci.text}`).join('\n')
+      if (it.type === 'link') return `${c.title||c.url||''} ${c.desc||''}`
+      return ''
+    }).filter(Boolean).join('\n')
+    // Reuse study generator
+    const set = await (prisma as any).studySet.create({ data: { userId: req.user.id, title: title || 'Flashcards from Board', subject: 'Board', sourceText: text.slice(0, 20000), tools: ['flashcards'], linkedNoteIds: [], content: {} } })
+    // Kick off AI generation similarly to /api/study/generate for flashcards
+    // For MVP, we will reuse /api/study/generate in the client instead of server-side to keep consistent behavior
+    res.json({ set })
+  } catch (e) {
+    res.status(500).json({ error: 'flashcards_failed' })
+  }
+})
+
+// AI Profile (personality) CRUD
+app.get('/api/ai/profile', requireAuth, async (req: any, res) => {
+  try {
+    const row = await (prisma as any).aIProfile.findUnique({ where: { userId: req.user.id } }).catch(()=>null)
+    const defaults = { name: 'Default', tone: 'friendly', style: 'concise', emotion: 'calm', ttsVoice: '' }
+    if (!row) return res.json(defaults)
+    res.json({ name: row.name, tone: row.tone, style: row.style, emotion: row.emotion, ttsVoice: row.ttsVoice })
+  } catch { res.status(500).json({ error: 'read_failed' }) }
+})
+app.post('/api/ai/profile', requireAuth, async (req: any, res) => {
+  try {
+    const body = req.body || {}
+    const patch = {
+      name: typeof body.name === 'string' ? body.name.slice(0,60) : undefined,
+      tone: typeof body.tone === 'string' ? body.tone.slice(0,40) : undefined,
+      style: typeof body.style === 'string' ? body.style.slice(0,40) : undefined,
+      emotion: typeof body.emotion === 'string' ? body.emotion.slice(0,40) : undefined,
+      ttsVoice: typeof body.ttsVoice === 'string' ? body.ttsVoice.slice(0,80) : undefined,
+    }
+    const existing = await (prisma as any).aIProfile.findUnique({ where: { userId: req.user.id } }).catch(()=>null)
+    if (!existing) await (prisma as any).aIProfile.create({ data: { userId: req.user.id, ...Object.fromEntries(Object.entries(patch).filter(([,v])=> v!==undefined)) } })
+    else await (prisma as any).aIProfile.update({ where: { userId: req.user.id }, data: Object.fromEntries(Object.entries(patch).filter(([,v])=> v!==undefined)) })
+    res.json({ ok: true })
+  } catch { res.status(500).json({ error: 'save_failed' }) }
+})
+
 // Admin: logs - list recent with filters
 app.get('/api/admin/logs', requireAuth, requireAdmin, async (req: any, res) => {
   const take = Math.min(Number(req.query.take || 100), 500)

@@ -26,6 +26,9 @@ model User {
   roleplayScenarios RoleplayScenario[]
   roleplaySessions  RoleplaySession[]
   studyProgress     StudyProgress[]
+  // AI Boards relations
+  boards       Board[]
+  aiProfile    AIProfile?
 }
 
 model Session {
@@ -208,4 +211,66 @@ model QuizSummary {
 
   @@index([createdAt])
   @@index([setId, createdAt])
+}
+
+/// Freeform visual boards for AI Boards feature
+model Board {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  title     String
+  viewport  Json     // { x: number, y: number, zoom: number }
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  items     BoardItem[]
+  edges     BoardEdge[]
+
+  @@index([userId, createdAt])
+}
+
+model BoardItem {
+  id        String   @id @default(cuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id])
+  type      String   // 'note' | 'checklist' | 'link' | 'image' | 'group'
+  x         Float
+  y         Float
+  w         Float
+  h         Float
+  z         Int      @default(0)
+  rotation  Float    @default(0)
+  content   Json     // varies by type
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([boardId])
+}
+
+model BoardEdge {
+  id        String   @id @default(cuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id])
+  sourceId  String
+  targetId  String
+  label     String?
+  style     Json?
+  createdAt DateTime @default(now())
+
+  @@index([boardId])
+}
+
+/// Per-user AI personality profile for Board Agent
+model AIProfile {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  name      String   @default("Default")
+  tone      String   @default("friendly")
+  style     String   @default("concise")
+  emotion   String   @default("calm")
+  ttsVoice  String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId])
 }
