@@ -30,6 +30,8 @@ import QuizSummaryPage from './pages/QuizSummary'
 import PastGamesPage from './pages/PastGames'
 import EnhancedStudyGuideView from './pages/EnhancedStudyGuideView'
 import { ToastProvider } from './components/ToastHost'
+import BoardsPage from './pages/Boards'
+import BoardView from './pages/BoardView'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -63,6 +65,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           <Route path="/quiz/join/:roomId" element={<QuizJoinPage />} />
           <Route path="/quiz/summary/:roomId" element={<QuizSummaryPage />} />
           <Route path="/quiz/past" element={<PastGamesPage />} />
+          <Route path="/boards" element={<BoardsPage />} />
+          <Route path="/boards/:id" element={<BoardView />} />
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
           <Route path="/awaiting" element={<AwaitingApproval />} />

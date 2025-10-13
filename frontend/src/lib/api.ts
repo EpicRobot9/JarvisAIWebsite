@@ -693,3 +693,120 @@ export async function toggleBookmark(studySetId: string, sectionId: string): Pro
     return data.progress || null
   } catch { return null }
 }
+
+// =========================
+// AI Boards: API helpers
+// =========================
+export type Board = { id: string; title: string; viewport: any; createdAt: string }
+export type BoardItem = { id: string; boardId: string; type: string; x: number; y: number; w: number; h: number; z: number; rotation: number; content: any; createdAt: string; updatedAt: string }
+export type BoardEdge = { id: string; boardId: string; sourceId: string; targetId: string; label?: string; style?: any; createdAt: string }
+
+export async function createBoard(title?: string): Promise<Board> {
+  const r = await fetch('/api/boards', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ title }) })
+  if (!r.ok) throw new AppError('router_failed', `Create board failed ${r.status}: ${r.statusText}`, await safeText(r))
+  const data = await r.json()
+  return data.board as Board
+}
+
+export async function listBoards(opts: { take?: number; cursor?: string } = {}): Promise<{ items: Board[]; nextCursor: string | null }>{
+  const params = new URLSearchParams()
+  if (opts.take) params.set('take', String(opts.take))
+  if (opts.cursor) params.set('cursor', opts.cursor)
+  const r = await fetch(`/api/boards?${params.toString()}`, { credentials: 'include' })
+  if (!r.ok) throw new AppError('router_failed', `List boards failed ${r.status}: ${r.statusText}`, await safeText(r))
+  const data = await r.json()
+  return { items: data.items || [], nextCursor: data.nextCursor ?? null }
+}
+
+export async function getBoard(id: string): Promise<{ board: Board; items: BoardItem[]; edges: BoardEdge[] }>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(id)}`, { credentials: 'include' })
+  if (!r.ok) throw new AppError('router_failed', `Read board failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function updateBoard(id: string, patch: Partial<Pick<Board, 'title' | 'viewport'>>): Promise<Board>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(patch) })
+  if (!r.ok) throw new AppError('router_failed', `Update board failed ${r.status}: ${r.statusText}`, await safeText(r))
+  const data = await r.json()
+  return data.board as Board
+}
+
+export async function deleteBoard(id: string): Promise<void>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(id)}`, { method: 'DELETE', credentials: 'include' })
+  if (!r.ok) throw new AppError('router_failed', `Delete board failed ${r.status}: ${r.statusText}`, await safeText(r))
+}
+
+export async function createBoardItem(boardId: string, data: Partial<BoardItem> & { type: string }): Promise<BoardItem>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/items`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(data) })
+  if (!r.ok) throw new AppError('router_failed', `Create item failed ${r.status}: ${r.statusText}`, await safeText(r))
+  const j = await r.json()
+  return j.item as BoardItem
+}
+
+export async function updateBoardItem(boardId: string, itemId: string, patch: Partial<BoardItem>): Promise<BoardItem>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/items/${encodeURIComponent(itemId)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(patch) })
+  if (!r.ok) throw new AppError('router_failed', `Update item failed ${r.status}: ${r.statusText}`, await safeText(r))
+  const j = await r.json()
+  return j.item as BoardItem
+}
+
+export async function deleteBoardItem(boardId: string, itemId: string): Promise<void>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/items/${encodeURIComponent(itemId)}`, { method: 'DELETE', credentials: 'include' })
+  if (!r.ok) throw new AppError('router_failed', `Delete item failed ${r.status}: ${r.statusText}`, await safeText(r))
+}
+
+export async function createBoardEdge(boardId: string, data: { sourceId: string; targetId: string; label?: string; style?: any }): Promise<BoardEdge>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/edges`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(data) })
+  if (!r.ok) throw new AppError('router_failed', `Create edge failed ${r.status}: ${r.statusText}`, await safeText(r))
+  const j = await r.json()
+  return j.edge as BoardEdge
+}
+
+export async function deleteBoardEdge(boardId: string, edgeId: string): Promise<void>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/edges/${encodeURIComponent(edgeId)}`, { method: 'DELETE', credentials: 'include' })
+  if (!r.ok) throw new AppError('router_failed', `Delete edge failed ${r.status}: ${r.statusText}`, await safeText(r))
+}
+
+export async function aiStructureBoard(boardId: string, prompt: string): Promise<{ items: BoardItem[] }>{
+  const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+  const userOpenAI = (localStorage.getItem('user_openai_api_key') || '').trim()
+  if (userOpenAI) headers['x-openai-key'] = userOpenAI
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ai/structure`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ prompt }) })
+  if (!r.ok) throw new AppError('router_failed', `Structure failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function aiSummarizeSelection(boardId: string, itemIds: string[]): Promise<{ note: { text: string }; item: BoardItem }>{
+  const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+  const userOpenAI = (localStorage.getItem('user_openai_api_key') || '').trim()
+  if (userOpenAI) headers['x-openai-key'] = userOpenAI
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ai/summarize`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ itemIds }) })
+  if (!r.ok) throw new AppError('router_failed', `Summarize failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function aiDiagramFromSelection(boardId: string, itemIds: string[], type: 'flowchart'|'sequence'|'class'|'er'|'state' = 'flowchart'): Promise<{ mermaid: string; item: BoardItem }>{
+  const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+  const userOpenAI = (localStorage.getItem('user_openai_api_key') || '').trim()
+  if (userOpenAI) headers['x-openai-key'] = userOpenAI
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ai/diagram`, { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ itemIds, type }) })
+  if (!r.ok) throw new AppError('router_failed', `Diagram failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function aiFlashcardsFromSelection(boardId: string, itemIds: string[], title?: string): Promise<{ set: StudySet }>{
+  const r = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ai/flashcards`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ itemIds, title }) })
+  if (!r.ok) throw new AppError('router_failed', `Flashcards failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function getAIProfile(): Promise<{ name: string; tone: string; style: string; emotion: string; ttsVoice: string }>{
+  const r = await fetch('/api/ai/profile', { credentials: 'include' })
+  if (!r.ok) throw new AppError('router_failed', `AI profile failed ${r.status}: ${r.statusText}`, await safeText(r))
+  return await r.json()
+}
+
+export async function saveAIProfile(p: { name?: string; tone?: string; style?: string; emotion?: string; ttsVoice?: string }): Promise<void>{
+  const r = await fetch('/api/ai/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(p) })
+  if (!r.ok) throw new AppError('router_failed', `Save AI profile failed ${r.status}: ${r.statusText}`, await safeText(r))
+}
