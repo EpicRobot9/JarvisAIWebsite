@@ -52,6 +52,20 @@ echo "[repair-db] Using compose files: ${compose_files[*]}"
 # Ensure services are up (db at least)
 docker compose "${compose_files[@]}" up -d db backend || true
 
+# Check DATABASE_URL in .env and warn if using localhost (should be 'db' for Docker)
+DB_URL_RAW="$(grep -E '^DATABASE_URL=' .env | head -n1 | cut -d'=' -f2-)"
+if [[ "$DB_URL_RAW" == *"localhost"* ]]; then
+  echo "[repair-db] WARNING: DATABASE_URL uses 'localhost'. For Docker, use 'db' as host (e.g. postgresql://jarvis:jarvis@db:5432/jarvis?schema=public)" >&2
+fi
+
+# Test DB connectivity before migration
+echo "[repair-db] Testing DB connectivity..."
+if ! docker compose "${compose_files[@]}" exec -T db pg_isready -U jarvis -d jarvis; then
+  echo "[repair-db] ERROR: Database is not reachable. Check container health, ports, and DATABASE_URL." >&2
+  exit 2
+fi
+
+
 # Function to run SQL against the DB as the configured superuser (jarvis)
 run_sql() {
   local sql="$1"
@@ -115,6 +129,21 @@ run_sql "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO jarvis
 run_sql "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO jarvis;"
 run_sql "ALTER TABLE IF EXISTS public._prisma_migrations OWNER TO jarvis;"
 
+# Prisma P1001/P1000/permission auto-fix
+echo "[repair-db] Checking Prisma migration errors..."
+PRISMA_STATUS=$(docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate status' 2>&1 || true)
+if echo "$PRISMA_STATUS" | grep -q 'P1001'; then
+  echo "[repair-db] Prisma error P1001: Can't reach database. Check DATABASE_URL and DB health." >&2
+elif echo "$PRISMA_STATUS" | grep -q 'P1000'; then
+  echo "[repair-db] Prisma error P1000: Authentication failed. Attempting to fix user/role..." >&2
+  # Try to create jarvis role if missing
+  docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U postgres -d postgres -c \"CREATE ROLE jarvis WITH LOGIN PASSWORD 'jarvis';\" || true"
+  docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U postgres -d jarvis -c \"ALTER DATABASE jarvis OWNER TO jarvis;\""
+  docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U postgres -d jarvis -c \"GRANT ALL PRIVILEGES ON SCHEMA public TO jarvis;\""
+  docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U postgres -d jarvis -c \"ALTER TABLE IF EXISTS public._prisma_migrations OWNER TO jarvis;\" -c \"GRANT ALL PRIVILEGES ON TABLE public._prisma_migrations TO jarvis;\""
+fi
+
+
 ## Reconcile previous failed migration(s)
 # 1) If an earlier migration failed (add_studyprogress_fks), mark it as applied so idempotent later migration can proceed.
 echo "[repair-db] Ensuring prior failed FK migration is cleared (if present)"
@@ -126,12 +155,23 @@ HAS_SOURCE_GUIDE=$(docker compose "${compose_files[@]}" exec -T db sh -lc "psql 
 HAS_SOURCE_GUIDE=${HAS_SOURCE_GUIDE//[$'\r\n\t ']}
 echo "[repair-db] sourceGuideId exists? => ${HAS_SOURCE_GUIDE:-unknown}"
 
+# Auto-resolve failed migrations (P3009)
+echo "[repair-db] Checking for failed migrations (P3009)..."
+FAILED_MIGRATION="20251009052000_add_bookmarks_to_progress"
+FAILED_MIGRATION_PRESENT=$(docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U jarvis -d jarvis -tAc \"SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='StudyProgress' AND column_name='bookmarks');\"")
+FAILED_MIGRATION_PRESENT=${FAILED_MIGRATION_PRESENT//[$'\r\n\t ']}
+if [[ "$FAILED_MIGRATION_PRESENT" == "t" ]]; then
+  echo "[repair-db] Detected failed migration $FAILED_MIGRATION but DB changes exist. Marking as applied..."
+  docker compose "${compose_files[@]}" exec -T backend sh -lc "npx prisma migrate resolve --applied $FAILED_MIGRATION"
+fi
+
 echo "[repair-db] Applying Prisma migrations..."
 if docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate deploy'; then
   echo "[repair-db] Migrations applied successfully."
 else
   echo "[repair-db] migrate deploy returned error. Showing status and last attempt output:"
   docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate status || true'
+  echo "[repair-db] If errors persist, check .env DATABASE_URL, DB health, and permissions."
   exit 1
 fi
 

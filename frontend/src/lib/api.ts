@@ -372,6 +372,24 @@ export async function gradeFlashcard(input: { front: string; expectedBack: strin
   }
 }
 
+// =========================
+// Boards: uploads
+// =========================
+export async function uploadBoardImage(blob: Blob): Promise<{ url: string }> {
+  try {
+    const form = new FormData()
+    form.append('image', blob, 'drawing.png')
+    const r = await fetch('/api/upload/image', { method: 'POST', body: form, credentials: 'include' })
+    if (!r.ok) throw new AppError('router_failed', `Image upload failed ${r.status}: ${r.statusText}`, await safeText(r))
+    const data = await r.json()
+    if (!data?.url) throw new AppError('router_failed', 'Upload did not return a URL')
+    return { url: String(data.url) }
+  } catch (e) {
+    if (!navigator.onLine) throw new AppError('network_offline', 'You appear to be offline.', e)
+    throw AppError.from(e, 'router_failed')
+  }
+}
+
 export async function saveNotesSettings(prefs: NotesPrefs): Promise<void> {
   try {
     const r = await fetch('/api/notes/settings', {

@@ -35,6 +35,8 @@ services:
       - NODE_ENV=production
     ports:
       - "8080:8080"
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -77,3 +79,5 @@ volumes:
     # Pin to a stable name so data persists even if COMPOSE_PROJECT_NAME or folder changes
     # Override with DB_VOLUME_NAME in .env if you already have an existing named volume to reuse
     name: ${DB_VOLUME_NAME:-jarvis_db_data}
+  uploads_data:
+    name: ${UPLOADS_VOLUME_NAME:-jarvis_uploads}

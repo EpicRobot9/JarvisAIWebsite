@@ -53,6 +53,7 @@ Notes
 - Seeding is opt-in now via `SEED_ON_START=true`. Leave it `false` for production restarts.
 - Ensure `ADMIN_SEED_MODE=ensure` for steady‑state (it won't reset passwords on future restarts).
 - Persistence: by default we use a stable named volume `jarvis_db_data`. To hard‑pin data to a host path, use the optional persist override below.
+- Uploads (drawings): the backend exposes `/uploads` and stores files on a named volume `jarvis_uploads` (mounted at `/app/uploads`). This persists across container rebuilds. If you prefer a bind mount to a host path, add a volume mapping for `/app/uploads` in your compose overrides.
 - Prisma in production uses `prisma migrate deploy` automatically on container start. Do not use `db push` or `migrate reset` in prod.
 
 ## 2) Start the app without binding host ports
