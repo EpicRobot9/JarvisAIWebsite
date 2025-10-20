@@ -1338,7 +1338,7 @@ app.post('/api/boards/:id/ai/chat', requireAuth, async (req: any, res) => {
             let toolPlan: { reply: string; tools: Array<{ name: string; arguments: any }> } | null = null
             if (oaPlan) {
               try {
-                const sys = 'You are an AI Board Agent Planner. Output strict JSON: { "reply": string, "tools": Array<{ "name": "create_note"|"create_link"|"create_image"|"summarize_selection"|"cluster_items"|"create_table"|"create_column"|"draw_shape"|"rename_card", "arguments": object }> }. Use <= 4 tools. For create_note, synthesize a helpful summary or outline; do not echo the user prompt.'
+                const sys = 'You are an AI Board Agent Planner. Output strict JSON: { "reply": string, "tools": Array<{ "name": "create_note"|"create_link"|"create_image"|"summarize_selection"|"cluster_items"|"create_table"|"create_column"|"draw_shape"|"rename_card"|"list_integrations"|"create_integration_item", "arguments": object }> }. Use <= 4 tools. For create_note, synthesize a helpful summary or outline; do not echo the user prompt. If the user asks to add something from an integration (e.g., a Study Set), first call list_integrations { boardId } and then call create_integration_item with { boardId, providerId: "study-sets", itemId } for the chosen set. Prefer minimal arguments; x/y are optional.'
                 const usr = `Board context sample:\n${snapshot}\n\nSelected items: ${selectedItemIds.length ? selectedItemIds.join(', ') : '(none)'}\n\nUser: ${message}\n\nPlan minimal helpful actions via MCP tools. If itemIds are provided, pass them through.`
                 const r = await oaPlan.chat.completions.create({ model: 'gpt-4o-mini', temperature: 0.3, response_format: { type: 'json_object' } as any, messages: [ { role: 'system', content: sys }, { role: 'user', content: usr } ] as any, max_tokens: 500 })
                 const content = (r.choices?.[0]?.message?.content || '{}') as string
@@ -1359,6 +1359,7 @@ app.post('/api/boards/:id/ai/chat', requireAuth, async (req: any, res) => {
               actions.push({ name: 'create_note', arguments: { boardId: id, text } })
             }
 
+            // Allow planner to call any registered MCP tool, including list_integrations and create_integration_item
             const toRun = toolPlan?.tools?.length ? toolPlan.tools.map(t => ({ name: t.name, arguments: { boardId: id, ...(t.arguments||{}), ...(selectedItemIds.length && !t.arguments?.itemIds ? { itemIds: selectedItemIds } : {}) } })) : actions
             const applied: any = { items: [], edges: [] }
             for (const a of toRun.slice(0, 6)) {

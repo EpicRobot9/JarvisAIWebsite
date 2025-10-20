@@ -52,6 +52,16 @@ echo "[repair-db] Using compose files: ${compose_files[*]}"
 # Ensure services are up (db at least)
 docker compose "${compose_files[@]}" up -d db backend || true
 
+# Offer to run a quick backup before making changes (skip in CI/non-interactive)
+if [[ -t 1 && -z "${SKIP_BACKUP:-}" ]]; then
+  echo -n "[repair-db] Create a quick backup before repair? [Y/n]: "
+  read -r ans || true
+  if [[ -z "$ans" || "$ans" =~ ^[Yy]$ ]]; then
+    echo "[repair-db] Running scripts/backup-db.sh ..."
+    "$DIR_ROOT/scripts/backup-db.sh" || echo "[repair-db] Backup failed or not available; continuing"
+  fi
+fi
+
 # Check DATABASE_URL in .env and warn if using localhost (should be 'db' for Docker)
 DB_URL_RAW="$(grep -E '^DATABASE_URL=' .env | head -n1 | cut -d'=' -f2-)"
 if [[ "$DB_URL_RAW" == *"localhost"* ]]; then
@@ -147,7 +157,14 @@ fi
 ## Reconcile previous failed migration(s)
 # 1) If an earlier migration failed (add_studyprogress_fks), mark it as applied so idempotent later migration can proceed.
 echo "[repair-db] Ensuring prior failed FK migration is cleared (if present)"
-docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate resolve --applied 20251009050000_add_studyprogress_fks' || true
+# Check if constraints already exist before marking migration as applied
+HAS_SP_UID_FK=$(docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U jarvis -d jarvis -tAc \"SELECT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='StudyProgress_userId_fkey');\"")
+HAS_SP_UID_FK=${HAS_SP_UID_FK//[$'\r\n\t ']}
+HAS_SP_SID_FK=$(docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U jarvis -d jarvis -tAc \"SELECT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name='StudyProgress_studySetId_fkey');\"")
+HAS_SP_SID_FK=${HAS_SP_SID_FK//[$'\r\n\t ']}
+if [[ "$HAS_SP_UID_FK" == "t" || "$HAS_SP_SID_FK" == "t" ]]; then
+  docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate resolve --applied 20251009050000_add_studyprogress_fks' || true
+fi
 
 # 2) Do NOT roll back source_guide unless it was actually applied; previous behavior caused P3011.
 echo "[repair-db] Checking StudySet.sourceGuideId presence..."
@@ -164,6 +181,33 @@ if [[ "$FAILED_MIGRATION_PRESENT" == "t" ]]; then
   echo "[repair-db] Detected failed migration $FAILED_MIGRATION but DB changes exist. Marking as applied..."
   docker compose "${compose_files[@]}" exec -T backend sh -lc "npx prisma migrate resolve --applied $FAILED_MIGRATION"
 fi
+
+# Baseline early init if database was created manually without Prisma history table
+echo "[repair-db] Checking Prisma migrations table exists..."
+HAS_MIG_TBL=$(docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U jarvis -d jarvis -tAc \"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='_prisma_migrations');\"")
+HAS_MIG_TBL=${HAS_MIG_TBL//[$'\r\n\t ']}
+if [[ "$HAS_MIG_TBL" != "t" ]]; then
+  echo "[repair-db] _prisma_migrations missing; creating table to allow baseline..."
+  docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U jarvis -d jarvis -v ON_ERROR_STOP=1 -c 'CREATE TABLE IF NOT EXISTS public._prisma_migrations (id TEXT PRIMARY KEY, checksum TEXT, finished_at TIMESTAMP, migration_name TEXT, logs TEXT, rolled_back_at TIMESTAMP, started_at TIMESTAMP, applied_steps_count INTEGER);'"
+fi
+
+# If schema already has the objects from a migration, mark it applied to align history without dropping data
+echo "[repair-db] Baseline: aligning migration history with existing schema (idempotent)"
+baseline_if_present() {
+  local mig_name="$1"; shift
+  local sql_check="$1"; shift
+  local present
+  present=$(docker compose "${compose_files[@]}" exec -T db sh -lc "psql -U jarvis -d jarvis -tAc \"${sql_check}\"")
+  present=${present//[$'\r\n\t ']}
+  if [[ "$present" == "t" ]]; then
+    docker compose "${compose_files[@]}" exec -T backend sh -lc "npx prisma migrate resolve --applied ${mig_name}" || true
+  fi
+}
+
+# Examples for this repo
+baseline_if_present 20250918164512_add_studyset "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='StudySet' AND table_schema='public');"
+baseline_if_present 20251011000000_create_studyprogress_if_missing "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='StudyProgress' AND table_schema='public');"
+baseline_if_present 20251013090000_create_boards_schema "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='Board' AND table_schema='public');"
 
 echo "[repair-db] Applying Prisma migrations..."
 if docker compose "${compose_files[@]}" exec -T backend sh -lc 'npx prisma migrate deploy'; then

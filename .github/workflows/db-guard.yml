@@ -1,0 +1,32 @@
+name: DB Migration Guard
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          npm ci || npm install
+
+      - name: Run migration guard
+        env:
+          # Optional: if you set secrets.DATABASE_URL to a staging DB, diff will run; otherwise guard skips diff.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          chmod +x scripts/*.sh || true
+          ./scripts/guard-migrations.sh

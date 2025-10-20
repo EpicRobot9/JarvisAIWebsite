@@ -23,6 +23,14 @@ SEED_ON_START=false
 
 ## Backup
 
+Use the helper script which selects the right compose files automatically and writes a timestamped dump under `./backups`:
+
+```
+./scripts/backup-db.sh
+```
+
+Manual (equivalent):
+
 ```
 docker compose exec -T db pg_dump -U jarvis -d jarvis > backups/$(date +%F_%H%M)-jarvis.sql
 ```
@@ -44,8 +52,10 @@ If migrations fail with errors like P3009/P3018 or "must be owner of table …",
 What it does:
 - Fixes ownership of all public tables/sequences to the `jarvis` role (using the internal `postgres` role when needed)
 - Grants proper privileges and default privileges
-- Detects a previously failed migration and marks it rolled back only when its changes aren’t present
-- Applies pending migrations (including idempotent create-if-missing steps)
+- Auto‑offers to create a quick backup before changes
+- Detects previously failed migrations and safely marks them applied only when their changes are already present
+- Baselines early migrations when the schema exists but `_prisma_migrations` history is missing
+- Applies pending migrations (idempotent `CREATE IF NOT EXISTS` style where applicable)
 
 Options:
 - `PROJECT_NAME=techexplore` to target a specific compose project
@@ -57,6 +67,48 @@ Post-check:
 ```
 docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml logs --tail=120 backend
 docker compose -p techexplore -f docker-compose.yml -f docker-compose.prod.yml exec -T backend sh -lc 'npx prisma migrate status'
+```
+
+## Safer update workflow (no data loss)
+
+Follow this on every schema update:
+
+1) Back up the DB
+
+```
+./scripts/backup-db.sh
+```
+
+2) Guard migrations locally (detect DROP COLUMN/TABLE etc.)
+
+```
+./scripts/guard-migrations.sh
+```
+
+CI: The repo includes a GitHub Actions workflow that runs the guard automatically on pushes/PRs to `main`. If you want the diff step to validate against a staging DB, add `DATABASE_URL` as a repository secret.
+
+3) Update the deployment (rebuild + apply migrations)
+
+```
+./scripts/update.sh --pull
+```
+
+If startup fails with a Prisma error, run:
+
+```
+./scripts/repair-db.sh
+```
+
+If you must perform a destructive migration (drop/rename), plan a data‑migration:
+- Add new columns/tables alongside old ones; write a backfill script.
+- Deploy; backfill in code; shift reads/writes to new fields; only then drop old fields in a later release.
+
+Backfill template:
+
+```
+# Copy and modify for your case
+cp backend/scripts/backfill.template.ts backend/scripts/backfill-my-change.ts
+npx tsx backend/scripts/backfill-my-change.ts
 ```
 
 ## Upgrading an existing DB volume (owner/role fix)

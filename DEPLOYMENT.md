@@ -282,6 +282,32 @@ docker compose -p techexplore logs -f cloudflared
 Backups:
 - `db_data` is a Docker volume. Periodically run `pg_dump` or snapshot the volume.
 
+Recommended safe update workflow:
+
+1) Back up DB
+
+```
+./scripts/backup-db.sh
+```
+
+2) Guard migrations locally (detect destructive SQL)
+
+```
+./scripts/guard-migrations.sh
+```
+
+3) Update and apply migrations
+
+```
+./scripts/update.sh --pull
+```
+
+If Prisma errors occur, repair in place:
+
+```
+./scripts/repair-db.sh
+```
+
 ### Full wipe (nuclear option)
 
 To completely remove the stack including data and the install directory (so it’s like it was never there), use the helper script from the repo root:

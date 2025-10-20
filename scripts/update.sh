@@ -17,6 +17,8 @@ DOMAIN="${DOMAIN:-}"
 USE_TUNNEL="auto"   # auto|yes|no
 PULL=false
 NO_BUILD=false
+NO_GUARD=false
+ALLOW_DANGEROUS=false
 OPENAI_API_KEY_IN="${OPENAI_API_KEY:-}"
 ELEVENLABS_API_KEY_IN="${ELEVENLABS_API_KEY:-}"
 ELEVENLABS_VOICE_ID_IN="${ELEVENLABS_VOICE_ID:-}"
@@ -34,6 +36,8 @@ while [[ $# -gt 0 ]]; do
     --elevenlabs-voice) ELEVENLABS_VOICE_ID_IN="$2"; shift 2 ;;
     --pull) PULL=true; shift ;;
     --no-build) NO_BUILD=true; shift ;;
+  --no-guard) NO_GUARD=true; shift ;;
+  --allow-dangerous) ALLOW_DANGEROUS=true; shift ;;
     -p|--project) PROJECT_NAME="$2"; shift 2 ;;
     --admin-user) ADMIN_USER_IN="$2"; shift 2 ;;
     --admin-password) ADMIN_PASSWORD_IN="$2"; shift 2 ;;
@@ -82,6 +86,20 @@ fi
 # Safe .env tweak only if domain provided
 if [[ -n "$DOMAIN" ]]; then
   set_env FRONTEND_ORIGIN "https://${DOMAIN}"
+fi
+
+# Run migration guard before bringing the stack up (can be skipped)
+if [[ "$NO_GUARD" != true ]]; then
+  echo "[update] Running migration guard..."
+  # Export DATABASE_URL from .env if present so guard's diff works
+  if [[ -f .env ]] && grep -q '^DATABASE_URL=' .env; then
+    export DATABASE_URL=$(grep -E '^DATABASE_URL=' .env | head -n1 | cut -d= -f2-)
+  fi
+  if [[ "$ALLOW_DANGEROUS" == true ]]; then export GUARD_ALLOW_DANGEROUS=true; fi
+  if ! ./scripts/guard-migrations.sh; then
+    echo "[update] Migration guard failed. Use --allow-dangerous to override or --no-guard to skip." >&2
+    exit 2
+  fi
 fi
 
 # Optionally inject keys

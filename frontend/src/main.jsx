@@ -32,6 +32,12 @@ import EnhancedStudyGuideView from './pages/EnhancedStudyGuideView'
 import { ToastProvider } from './components/ToastHost'
 import BoardsPage from './pages/Boards'
 import BoardView from './pages/BoardView'
+// Register integrations
+import './integrations/StudySets'
+import './integrations/StudyGuides'
+import './integrations/Flashcards'
+import './integrations/Tests'
+import './integrations/Match'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

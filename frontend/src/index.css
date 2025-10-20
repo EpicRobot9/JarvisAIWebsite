@@ -245,6 +245,55 @@ body {
 	to { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
 }
 
+/* Generic hover lift for cards and tiles */
+.hover-lift {
+	transition: transform .2s ease, box-shadow .25s ease, border-color .2s ease, background-color .2s ease;
+}
+.hover-lift:hover {
+	transform: translateY(-2px) scale(1.01);
+	box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+}
+
+/* Animated selection ring (used on selected board items) */
+.ring-emerald-animated {
+	box-shadow: 0 0 0 2px rgba(16,185,129,0.55), 0 0 0 6px rgba(16,185,129,0.18);
+	animation: ring-pulse 1.5s ease-in-out infinite;
+}
+@keyframes ring-pulse {
+	0%, 100% { box-shadow: 0 0 0 2px rgba(16,185,129,0.45), 0 0 0 8px rgba(16,185,129,0.10); }
+	50% { box-shadow: 0 0 0 3px rgba(16,185,129,0.75), 0 0 0 10px rgba(16,185,129,0.18); }
+}
+
+/* Animated dashed stroke for linking preview */
+.dash-flow {
+	stroke-dasharray: 6 6;
+	animation: dash-move 1.2s linear infinite;
+}
+@keyframes dash-move {
+	to { stroke-dashoffset: -24; }
+}
+
+/* SVG edge subtle glow when selected */
+.edge-line {
+	transition: stroke .2s ease, stroke-width .2s ease, opacity .2s ease;
+}
+.edge-selected {
+	filter: drop-shadow(0 0 6px rgba(16,185,129,0.6));
+}
+
+/* Lightweight skeleton shimmer */
+.skeleton {
+	position: relative;
+	overflow: hidden;
+	background: linear-gradient(90deg, rgba(255,255,255,0.06), rgba(255,255,255,0.1), rgba(255,255,255,0.06));
+	background-size: 200% 100%;
+	animation: shimmer 1.1s linear infinite;
+}
+@keyframes shimmer {
+	0% { background-position: 200% 0; }
+	100% { background-position: -200% 0; }
+}
+
 /* Subtle animated gradient border helper */
 .glow-border {
 	position: relative;

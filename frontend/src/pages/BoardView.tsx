@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getBoard, updateBoard, createBoardItem, updateBoardItem, deleteBoardItem, createBoardEdge, deleteBoardEdge, aiStructureBoard, aiSummarizeSelection, aiDiagramFromSelection, aiFlashcardsFromSelection, aiSuggestLinks, aiCluster, uploadBoardImage, type BoardItem, type BoardEdge } from '../lib/api'
+import { getBoard, updateBoard, createBoardItem, updateBoardItem, deleteBoardItem, createBoardEdge, deleteBoardEdge, aiStructureBoard, aiSummarizeSelection, aiDiagramFromSelection, aiFlashcardsFromSelection, aiSuggestLinks, aiCluster, uploadBoardImage, type BoardItem, type BoardEdge, getStudySet, type Flashcard, type McqQuestion, type MatchPair } from '../lib/api'
 import { AppError } from '../lib/api'
 import { useCallSession } from '../hooks/useCallSession'
 import { parseBoardCommand } from '../lib/commands'
@@ -8,6 +8,31 @@ import { enqueueStreamUrl, getPlaybackQueueLength, isAudioActive, setOnQueueIdle
 import { getTtsStreamUrl } from '../lib/api'
 import { exportNodeToPng, defaultBoardFileName } from '../lib/export'
 import { ZoomIn, ZoomOut, RefreshCcw, Maximize2, Download, Link2, Unlink, StickyNote, ListChecks, Image as ImageIcon, Shapes, Mic, MicOff, Table as TableIcon, Columns as ColumnsIcon, Plus, X, GripVertical, Pencil, Eraser } from 'lucide-react'
+import IntegrationsDrawer from '../components/IntegrationsDrawer'
+import { motion, AnimatePresence } from 'framer-motion'
+
+class BoardErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: any | null }> {
+  constructor(props: any) { super(props); this.state = { error: null } }
+  static getDerivedStateFromError(error: any) { return { error } }
+  componentDidCatch(error: any, info: any) { try { console.error('Board error:', error, info) } catch {} }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 p-6">
+          <div className="max-w-2xl mx-auto bg-red-950/40 border border-red-900 rounded p-4">
+            <div className="text-red-300 font-medium mb-2">Something went wrong rendering the board.</div>
+            <div className="text-xs text-red-200 mb-3 whitespace-pre-wrap">
+              {String(this.state.error?.message || this.state.error || 'Unknown error')}
+            </div>
+            <button className="jarvis-btn jarvis-btn-secondary" onClick={()=>{ this.setState({ error: null }) }}>Try to recover</button>
+            <button className="jarvis-btn jarvis-btn-primary ml-2" onClick={()=>{ try { window.location.reload() } catch {} }}>Reload</button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children as any
+  }
+}
 
 export default function BoardView() {
   const { id } = useParams()
@@ -18,6 +43,9 @@ export default function BoardView() {
   const [prompt, setPrompt] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [debugDraw, setDebugDraw] = useState<boolean>(() => {
+    try { return localStorage.getItem('boards_debug_draw') === '1' } catch { return false }
+  })
   const dragRef = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number } | null>(null)
   const resizeRef = useRef<{ id: string; startX: number; startY: number; origW: number; origH: number } | null>(null)
   const panRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null)
@@ -32,6 +60,28 @@ export default function BoardView() {
   const [busy, setBusy] = useState<string | null>(null)
   const [voiceOn, setVoiceOn] = useState(false)
   const checklistDragRef = useRef<{ itemId: string; from: number } | null>(null)
+  // Box selection (marquee) state
+  const boxSelRef = useRef<{
+    start: { x: number; y: number }
+    additive: boolean
+    originSel: Record<string, boolean>
+  } | null>(null)
+  const [boxSel, setBoxSel] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  // Study set flashcard popout state
+  const [flashPop, setFlashPop] = useState<{
+    itemId: string
+    studySetId: string
+    cards: Flashcard[]
+    flipped: Record<number, boolean>
+  } | null>(null)
+  // Generic radial popout for non-flashcard modes (guide/test/match)
+  const [ringPop, setRingPop] = useState<{
+    itemId: string
+    studySetId: string
+    mode: 'guide'|'test'|'match'
+    entries: Array<{ front: string; back: string }>
+    flipped: Record<number, boolean>
+  } | null>(null)
   // Drawing UI state
   type DrawTool = 'pen' | 'eraser'
   type Point = { x: number; y: number }
@@ -48,23 +98,88 @@ export default function BoardView() {
   const drawingRef = useRef(false)
   const currStrokeRef = useRef<Stroke | null>(null)
 
+  // Debug toggles
+  useEffect(() => { try { localStorage.setItem('boards_debug_draw', debugDraw ? '1' : '0') } catch {} }, [debugDraw])
+  // Text measurement for flashcard sizing (12px text-xs; approximate)
+  const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null)
+  function getMeasureCtx() {
+    if (measureCtxRef.current) return measureCtxRef.current
+    const c = document.createElement('canvas')
+    const ctx = c.getContext('2d')!
+    ctx.font = '12px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Noto Sans, sans-serif'
+    measureCtxRef.current = ctx
+    return ctx
+  }
+  function measureWord(pxText: string, maxWidth: number): number {
+    const ctx = getMeasureCtx()
+    const w = ctx.measureText(pxText).width
+    return Math.min(Math.max(w, 1), maxWidth)
+  }
+  function wrapText(text: string, maxWidth: number): { lines: string[]; widths: number[] } {
+    const ctx = getMeasureCtx()
+    const words = (text || '').split(/\s+/)
+    const lines: string[] = []
+    const widths: number[] = []
+    let line = ''
+    let w = 0
+    for (const word of words) {
+      const test = line ? line + ' ' + word : word
+      const tw = ctx.measureText(test).width
+      if (tw > maxWidth && line) {
+        lines.push(line); widths.push(w)
+        line = word
+        w = ctx.measureText(word).width
+      } else {
+        line = test
+        w = tw
+      }
+    }
+    if (line) { lines.push(line); widths.push(w) }
+    return { lines, widths }
+  }
+  function estimateFlashDims(front: string, back: string): { w: number; h: number } {
+    const minW = 140, maxW = 280, padX = 16, padY = 16, metaH = 16, headerH = 18
+    // Ensure width fits the longest single word to avoid mid-word wrap
+    const words = `${front||''} ${back||''}`.trim().split(/\s+/)
+    const longestWord = words.reduce((m, w) => Math.max(m, measureWord(w, maxW - padX)), 0)
+    let w = Math.max(minW, Math.min(maxW, Math.ceil(longestWord + padX)))
+    // Wrap both sides at chosen width
+    const contentW = w - padX
+    const frontWrap = wrapText(front || '', contentW)
+    const backWrap = wrapText(back || '', contentW)
+    const lineH = 16
+    const hFront = padY + headerH + frontWrap.lines.length * lineH + metaH
+    const hBack = padY + headerH + backWrap.lines.length * lineH + metaH
+    const h = Math.max(90, Math.min(220, Math.ceil(Math.max(hFront, hBack))))
+    // If lines are very long, try to widen within cap
+    const widest = Math.max(...frontWrap.widths, ...backWrap.widths, 0)
+    const needed = Math.min(maxW, Math.max(w, Math.ceil(widest + padX)))
+    w = Math.max(minW, Math.min(maxW, needed))
+    return { w, h }
+  }
+
   // Redraw helper for draw overlay
   const redrawDrawCanvas = React.useCallback(() => {
-    const canvas = drawCanvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    // Clear fully
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    // Draw committed strokes
-    for (const s of strokes) drawStrokePath(ctx, s)
-    // Draw current stroke if any
-    if (currStrokeRef.current) drawStrokePath(ctx, currStrokeRef.current)
+    try {
+      const canvas = drawCanvasRef.current
+      if (!canvas) return
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      // Clear fully
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      // Draw committed strokes
+      for (const s of strokes) drawStrokePath(ctx, s)
+      // Draw current stroke if any
+      if (currStrokeRef.current) drawStrokePath(ctx, currStrokeRef.current)
+    } catch (e) {
+      // avoid crashing UI
+    }
   }, [strokes])
 
   // Keep canvas in sync when viewport or strokes change
   useEffect(() => {
     if (!drawMode) return
+    if (debugDraw) console.log('[draw] redrawDrawCanvas (effect)')
     redrawDrawCanvas()
   }, [drawMode, redrawDrawCanvas])
 
@@ -79,6 +194,7 @@ export default function BoardView() {
     const rect = { w: Math.max(1, Math.round(c.clientWidth)), h: Math.max(1, Math.round(c.clientHeight)) }
     if (c.width !== rect.w) c.width = rect.w
     if (c.height !== rect.h) c.height = rect.h
+    if (debugDraw) console.log('[draw] resize canvas to', rect)
     redrawDrawCanvas()
   }, [drawMode, redrawDrawCanvas, items])
 
@@ -107,6 +223,7 @@ export default function BoardView() {
   }
 
   function discardDrawing() {
+    if (debugDraw) console.log('[draw] discardDrawing')
     setDrawMode(false)
     setStrokes([])
     setRedoStack([])
@@ -114,6 +231,12 @@ export default function BoardView() {
     drawingRef.current = false
     clearDrawingCanvas()
     setEditDrawingTargetId(null)
+  }
+
+  function hasPendingDrawing(): boolean {
+    if (currStrokeRef.current && currStrokeRef.current.points?.length) return true
+    if (strokes.some(s => s.points?.length)) return true
+    return false
   }
 
   function undoDrawing() {
@@ -133,86 +256,155 @@ export default function BoardView() {
   }
 
   async function saveDrawing() {
-    if (!id) return
-    // Aggregate all points to compute bounding box
-    const allPts: Point[] = []
-    for (const s of strokes) allPts.push(...s.points)
-    if (currStrokeRef.current) allPts.push(...currStrokeRef.current.points)
-    if (allPts.length === 0) { discardDrawing(); return }
-    const src = drawCanvasRef.current
-  if (!src) { discardDrawing(); return }
-  const minX = Math.max(0, Math.min(...allPts.map(p => p.x)) - drawSize * 2)
-  const minY = Math.max(0, Math.min(...allPts.map(p => p.y)) - drawSize * 2)
-  const maxX = Math.min(src.width, Math.max(...allPts.map(p => p.x)) + drawSize * 2)
-  const maxY = Math.min(src.height, Math.max(...allPts.map(p => p.y)) + drawSize * 2)
-    const w = Math.max(1, Math.round(maxX - minX))
-    const h = Math.max(1, Math.round(maxY - minY))
-    // Create a cropped canvas
-    const crop = document.createElement('canvas')
-    crop.width = w
-    crop.height = h
-    const ctx = crop.getContext('2d')!
-    ctx.clearRect(0, 0, w, h)
-    ctx.drawImage(src, minX, minY, w, h, 0, 0, w, h)
-    // Convert to Blob and upload to backend (avoid large data URLs in content)
-    const dataUrl = crop.toDataURL('image/png')
-    const blob = await (await fetch(dataUrl)).blob()
-    let uploadedUrl = ''
     try {
-      const up = await uploadBoardImage(blob)
-      uploadedUrl = up.url
-    } catch (e) {
-      // Fallback: if upload fails, still use data URL so user doesn’t lose work
-      uploadedUrl = dataUrl
-    }
-    const vectorStrokes = strokes.map(s => ({ points: s.points, color: s.color, size: s.size, tool: s.tool }))
-    const mid = { x: minX + w/2, y: minY + h/2 }
-    try {
-      // Edit mode: update existing image item with new PNG and vectors, keep x/y unless user wants snap (disabled in edit)
-      if (editDrawingTargetId) {
-        const existing = items.find(i => i.id === editDrawingTargetId)
-        if (existing) {
-          const nextContent = { ...(existing.content||{}), url: uploadedUrl, caption: (existing.content?.caption || 'Drawing'), vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } }
-          await updateBoardItem(id, existing.id, { x: Math.round(minX), y: Math.round(minY), w, h, content: nextContent } as any)
-          setItems(prev => prev.map(it => it.id === existing.id ? { ...it, x: Math.round(minX), y: Math.round(minY), w, h, content: nextContent } : it))
+      if (debugDraw) console.log('[draw] saveDrawing start')
+      if (!id) return
+      // Ensure the latest current stroke is reflected on canvas before sampling
+      try { redrawDrawCanvas() } catch {}
+      // Aggregate all points to compute bounding box
+      const allPts: Point[] = []
+      for (const s of strokes) allPts.push(...(s.points||[]))
+      if (currStrokeRef.current) allPts.push(...(currStrokeRef.current.points||[]))
+      if (allPts.length === 0) { discardDrawing(); return }
+      const src = drawCanvasRef.current
+      if (!src) { discardDrawing(); return }
+      const minX = Math.max(0, Math.min(...allPts.map(p => p.x)) - drawSize * 2)
+      const minY = Math.max(0, Math.min(...allPts.map(p => p.y)) - drawSize * 2)
+      const maxX = Math.min(src.width, Math.max(...allPts.map(p => p.x)) + drawSize * 2)
+      const maxY = Math.min(src.height, Math.max(...allPts.map(p => p.y)) + drawSize * 2)
+      const w = Math.max(1, Math.round(maxX - minX))
+      const h = Math.max(1, Math.round(maxY - minY))
+      // Create a cropped canvas
+      const crop = document.createElement('canvas')
+      crop.width = w
+      crop.height = h
+      const ctx = crop.getContext('2d')
+      let dataUrl: string
+      if (ctx) {
+        try {
+          ctx.clearRect(0, 0, w, h)
+          ctx.drawImage(src, minX, minY, w, h, 0, 0, w, h)
+          dataUrl = crop.toDataURL('image/png')
+        } catch {
+          // Fallback to full canvas if crop fails
+          dataUrl = src.toDataURL('image/png')
         }
       } else {
-      // Optionally attach to a column under the drawing center
-      if (snapToColumn) {
-        const col = getColumnUnder(mid.x, mid.y)
-        if (col) {
-          const item = await createBoardItem(id, { type: 'image', x: Math.round(minX), y: Math.round(minY), w, h, content: { url: uploadedUrl, caption: 'Drawing', vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } } as any } as any)
-          const withNew = [...items, { ...item, x: mid.x, y: mid.y }]
-          const reflow = layoutColumn(col, item.id, withNew)
-          setItems(prev => {
-            const base = [...prev, item]
-            return base.map(it => {
-              const r = reflow.find(x => x.id === it.id)
-              return r ? { ...it, x: r.x, y: r.y, content: r.content } : it
-            })
-          })
-          for (const r of reflow) { try { await updateBoardItem(id, r.id, { x: r.x, y: r.y, content: r.content } as any) } catch {} }
-        } else {
-          const item = await createBoardItem(id, { type: 'image', x: Math.round(minX), y: Math.round(minY), w, h, content: { url: uploadedUrl, caption: 'Drawing', vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } } as any } as any)
-          setItems(prev => [...prev, item])
-        }
-      } else {
-        const item = await createBoardItem(id, { type: 'image', x: Math.round(minX), y: Math.round(minY), w, h, content: { url: uploadedUrl, caption: 'Drawing', vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } } as any } as any)
-        setItems(prev => [...prev, item])
+        // Fallback if 2D context not available
+        dataUrl = src.toDataURL('image/png')
       }
+      const blob = await (await fetch(dataUrl)).blob()
+      const localUrl = dataUrl // use data URL for reliable immediate preview
+      const vectorStrokes = strokes.map(s => ({ points: s.points, color: s.color, size: s.size, tool: s.tool }))
+      const mid = { x: minX + w/2, y: minY + h/2 }
+      try {
+        // Edit mode: optimistic preview with local object URL, then update with uploaded URL
+        if (editDrawingTargetId) {
+          const existing = items.find(i => i.id === editDrawingTargetId)
+          if (existing) {
+            if (existing.type === 'draw') {
+              // Update vector draw item in-place: convert to local item coords
+              const localStrokes = vectorStrokes.map(s => ({
+                color: s.color,
+                width: s.size,
+                tool: s.tool,
+                points: (s.points||[]).map(p => ({ x: p.x - minX, y: p.y - minY }))
+              }))
+              const nextContent = { ...(existing.content||{}), strokes: localStrokes, title: existing.content?.title || '' }
+              // Optimistic update
+              setItems(prev => prev.map(it => it.id === existing.id ? { ...it, x: Math.round(minX), y: Math.round(minY), w, h, content: nextContent } : it))
+              try { await updateBoardItem(id, existing.id, { x: Math.round(minX), y: Math.round(minY), w, h, content: nextContent } as any) } catch {}
+            } else {
+              // Show immediately as image card with embedded vectors
+              const previewContent = { ...(existing.content||{}), url: localUrl, caption: (existing.content?.caption || 'Drawing'), vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } }
+              setItems(prev => prev.map(it => it.id === existing.id ? { ...it, x: Math.round(minX), y: Math.round(minY), w, h, content: previewContent } : it))
+              // Start upload; then persist
+              let remoteUrl = ''
+              try { const up = await uploadBoardImage(blob); remoteUrl = up.url } catch {}
+              const finalUrl = remoteUrl || localUrl
+              const nextContent = { ...(existing.content||{}), url: finalUrl, caption: (existing.content?.caption || 'Drawing'), vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } }
+              try { await updateBoardItem(id, existing.id, { x: Math.round(minX), y: Math.round(minY), w, h, content: nextContent } as any) } catch {}
+              setItems(prev => prev.map(it => it.id === existing.id ? { ...it, x: Math.round(minX), y: Math.round(minY), w, h, content: nextContent } : it))
+              // Nothing to revoke for data URLs
+            }
+          }
+        } else {
+          // Create: optimistic temp item with local object URL, then swap with real persisted item
+          const tempId = (typeof crypto!=='undefined' && (crypto as any).randomUUID) ? (crypto as any).randomUUID() : `temp-${Date.now()}`
+          const tempItem = { id: tempId, type: 'image', x: Math.round(minX), y: Math.round(minY), w, h, content: { url: localUrl, caption: 'Drawing', vectorStrokes, vectorBounds: { x: minX, y: minY, w, h }, temp: true } as any } as any
+          setItems(prev => [...prev, tempItem])
+          // Upload in background
+          let remoteUrl = ''
+          try { const up = await uploadBoardImage(blob); remoteUrl = up.url } catch {}
+          const finalUrl = remoteUrl || localUrl
+          try {
+            if (snapToColumn) {
+              const col = getColumnUnder(mid.x, mid.y)
+              if (col) {
+                const created = await createBoardItem(id, { type: 'image', x: Math.round(minX), y: Math.round(minY), w, h, content: { url: finalUrl, caption: 'Drawing', vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } } as any } as any)
+                const withNew = [...items.filter(i=>i.id!==tempId), { ...created, x: mid.x, y: mid.y }]
+                const reflow = layoutColumn(col, created.id, withNew)
+                setItems(prev => {
+                  const base = [...prev.filter(p=>p.id!==tempId), created]
+                  return base.map(it => {
+                    const r = reflow.find(x => x.id === it.id)
+                    return r ? { ...it, x: r.x, y: r.y, content: r.content } : it
+                  })
+                })
+                for (const r of reflow) { try { await updateBoardItem(id, r.id, { x: r.x, y: r.y, content: r.content } as any) } catch {} }
+              } else {
+                const created = await createBoardItem(id, { type: 'image', x: Math.round(minX), y: Math.round(minY), w, h, content: { url: finalUrl, caption: 'Drawing', vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } } as any } as any)
+                setItems(prev => [...prev.filter(p=>p.id!==tempId), created])
+              }
+            } else {
+              const created = await createBoardItem(id, { type: 'image', x: Math.round(minX), y: Math.round(minY), w, h, content: { url: finalUrl, caption: 'Drawing', vectorStrokes, vectorBounds: { x: minX, y: minY, w, h } } as any } as any)
+              setItems(prev => [...prev.filter(p=>p.id!==tempId), created])
+            }
+          } finally {
+            // Nothing to revoke for data URLs
+          }
+        }
+      } catch (e:any) {
+        setError(e?.message || 'Save drawing failed')
+      } finally {
+        discardDrawing()
       }
     } catch (e:any) {
+      // Catch any unexpected errors in saveDrawing to avoid crashing the page
       setError(e?.message || 'Save drawing failed')
-    } finally {
-      discardDrawing()
+      try { discardDrawing() } catch {}
     }
   }
 
   // Begin editing an existing image item
   function beginEditDrawing(it: BoardItem) {
-    // Populate strokes if available; otherwise start empty
-    const vs = (it as any)?.content?.vectorStrokes as Stroke[] | undefined
-    setStrokes(Array.isArray(vs) ? vs.map(s => ({ points: s.points || [], color: s.color || drawColor, size: s.size || 4, tool: (s.tool as DrawTool) || 'pen' })) : [])
+    try {
+      let init: Stroke[] = []
+      // Image drawings: absolute board coords already recorded in vectorStrokes
+      if (it.type === 'image') {
+        const vs = (it as any)?.content?.vectorStrokes as any[] | undefined
+        if (Array.isArray(vs)) {
+          init = vs.map(s => ({
+            points: (s.points || []).map((p: any) => ({ x: Number(p?.x) || 0, y: Number(p?.y) || 0 })),
+            color: s.color || drawColor,
+            size: s.size || s.width || 4,
+            tool: (s.tool as DrawTool) || 'pen'
+          }))
+        }
+      } else if (it.type === 'draw') {
+        // Draw-type cards store local points; offset to board space for editing
+        const vs = (it as any)?.content?.strokes as any[] | undefined
+        if (Array.isArray(vs)) {
+          init = vs.map(s => ({
+            points: (s.points || []).map((p: any) => ({ x: (Number(p?.x) || 0) + it.x, y: (Number(p?.y) || 0) + it.y })),
+            color: s.color || drawColor,
+            size: s.size || s.width || 4,
+            tool: (s.tool as DrawTool) || 'pen'
+          }))
+        }
+      }
+      setStrokes(init)
+    } catch { setStrokes([]) }
     setRedoStack([])
     setEditDrawingTargetId(it.id)
     setDrawMode(true)
@@ -301,6 +493,8 @@ export default function BoardView() {
   // Global pointer handlers for drag/resize
   useEffect(() => {
     function onMove(e: MouseEvent) {
+      // Skip board-level mouse tracking while drawing to avoid extra rerenders
+      if (drawMode) return
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect()
         const cx = e.clientX - rect.left
@@ -309,6 +503,35 @@ export default function BoardView() {
         const bx = (cx - viewport.x) / viewport.zoom
         const by = (cy - viewport.y) / viewport.zoom
         setMousePos({ x: bx, y: by })
+      }
+      // Marquee selection drag
+      if (boxSelRef.current) {
+        const start = boxSelRef.current.start
+        // Use current mouse position in board coords
+        const rect = containerRef.current?.getBoundingClientRect()
+        if (!rect) return
+        const cx = e.clientX - rect.left
+        const cy = e.clientY - rect.top
+        const curr = { x: (cx - viewport.x) / viewport.zoom, y: (cy - viewport.y) / viewport.zoom }
+        const x1 = Math.min(start.x, curr.x)
+        const y1 = Math.min(start.y, curr.y)
+        const x2 = Math.max(start.x, curr.x)
+        const y2 = Math.max(start.y, curr.y)
+        const rectSel = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 }
+        setBoxSel(rectSel)
+        // Compute selection
+        const origin = boxSelRef.current.originSel
+        const nextSel: Record<string, boolean> = { ...(boxSelRef.current.additive ? origin : {}) }
+        function intersects(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) {
+          return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+        }
+        for (const it of items) {
+          // Only consider normal items (exclude edges/columns? include all board items is fine)
+          const r = { x: it.x, y: it.y, w: it.w, h: it.h }
+          if (intersects(rectSel, r)) nextSel[it.id] = true
+        }
+        setSel(nextSel)
+        return
       }
       if (dragRef.current) {
         const { id, startX, startY, origX, origY } = dragRef.current
@@ -358,6 +581,14 @@ export default function BoardView() {
       }
     }
     async function onUp() {
+      // Skip board-level mouse up work while drawing; draw overlay handles it
+      if (drawMode) return
+      if (boxSelRef.current) {
+        // Finalize marquee, keep selection as set during drag
+        boxSelRef.current = null
+        setBoxSel(null)
+        return
+      }
       if (dragRef.current) {
         const { id } = dragRef.current
         dragRef.current = null
@@ -486,7 +717,8 @@ export default function BoardView() {
   // Delete key handler
   useEffect(() => {
     async function onKey(e: KeyboardEvent) {
-      if (e.key === 'Delete' && selectedIds.length > 0 && id) {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0 && id) {
+        e.preventDefault()
         const ids = [...selectedIds]
         setSel({})
         for (const itemId of ids) {
@@ -556,28 +788,63 @@ export default function BoardView() {
       }
     }
     let y = col.y + headerH + pad
+    let maxW = 300 // default column width
+    let totalH = headerH + pad
     for (const m of ordered) {
       const x = col.x + pad
       result.push({ id: m.id, x, y, content: { ...(m.content || {}), columnId: col.id } })
       y = y + m.h + pad
+      maxW = Math.max(maxW, m.w + pad * 2)
+      totalH += m.h + pad
+    }
+    // Update column size to fit contents
+    const colIdx = base.findIndex(it => it.id === col.id)
+    if (colIdx !== -1) {
+      base[colIdx].w = maxW
+      base[colIdx].h = Math.max(totalH, 120)
     }
     return result
   }
 
-  // Drag & drop from Tools palette
+  // Drag & drop from Tools palette and Integrations drawer
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
-    // Allow drop if payload is our tool type
-    if (e.dataTransfer.types.includes('application/x-board-tool') || e.dataTransfer.types.includes('text/plain')) {
+    // Allow drop if payload is our tool type or integration
+    const types = e.dataTransfer.types
+    if (types.includes('application/x-board-tool') || types.includes('application/x-board-integration') || types.includes('text/plain')) {
       e.preventDefault()
     }
   }
   async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     if (!id) return
+    const rawIntegration = e.dataTransfer.getData('application/x-board-integration')
     const type = e.dataTransfer.getData('application/x-board-tool') || e.dataTransfer.getData('text/plain')
-    if (!type) return
+    if (!rawIntegration && !type) return
     e.preventDefault()
     const p = toBoardCoords(e.clientX, e.clientY)
     const base = { x: Math.round(p.x - 160), y: Math.round(p.y - 100) }
+    if (rawIntegration) {
+      try {
+        const payload = JSON.parse(rawIntegration)
+        if (payload?.integration === 'study-sets' && payload?.itemType === 'studySet' && payload?.id) {
+          // Represent as a Study Set card with preview behavior; respect requested openMode if provided
+          const openMode = payload.openMode || 'flashcards'
+          const item = await createBoardItem(id, { type: 'studyset', ...base, w: 360, h: 140, content: { studySetId: payload.id, title: payload.title || 'Study Set', openMode } as any } as any)
+          const col = getColumnUnder(p.x, p.y)
+          if (col) {
+            const withNew = [...items, { ...item, x: p.x, y: p.y }]
+            const reflow = layoutColumn(col, item.id, withNew)
+            setItems(prev => prev.map(it => {
+              const r = reflow.find(x => x.id === it.id)
+              return r ? { ...it, x: r.x, y: r.y, content: r.content } : it
+            }))
+            for (const r of reflow) { try { await updateBoardItem(id, r.id, { x: r.x, y: r.y, content: r.content } as any) } catch {} }
+          } else {
+            setItems(prev => [...prev, item])
+          }
+          return
+        }
+      } catch {}
+    }
     try {
       if (type === 'note') {
         const item = await createBoardItem(id, { type: 'note', ...base, w: 320, h: 200, content: { text: '' } as any } as any)
@@ -865,8 +1132,11 @@ export default function BoardView() {
   }
 
   return (
+    <BoardErrorBoundary>
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="p-4 border-b border-slate-800 flex items-center gap-3">
+      <motion.div className="p-4 border-b border-slate-800 flex items-center gap-3"
+        initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}
+      >
         <Link to="/boards" className="px-3 py-2 rounded-md border border-slate-700 hover:bg-slate-800 text-slate-300 text-sm">Boards</Link>
         <input value={title} onChange={e=>setTitle(e.target.value)} onBlur={saveTitle} className="px-3 py-2 rounded-md bg-slate-900/60 border border-slate-800 text-sm outline-none focus:border-slate-700 flex-1" />
         <div className="ml-auto flex items-center gap-2">
@@ -892,11 +1162,11 @@ export default function BoardView() {
             }}
           ><Download className="w-4 h-4" /> <span className="hidden sm:inline">Export PNG</span></button>
         </div>
-      </div>
+  </motion.div>
 
       {error && <div className="m-4 text-sm text-red-300 bg-red-950/40 border border-red-900 rounded p-3">{error}</div>}
 
-      <div className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
+  <div className="p-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
         {/* Simple canvas */}
         <div
           className="relative rounded-xl bg-slate-900/60 border border-slate-800 min-h-[60vh] overflow-auto"
@@ -908,7 +1178,8 @@ export default function BoardView() {
             const target = e.target as HTMLElement
             const isBackground = target === e.currentTarget
             if (e.button !== 0) return
-            if (isBackground || isSpaceDown) {
+            if ((isBackground || isSpaceDown) && isSpaceDown) {
+              // Pan when Space is held
               panRef.current = { startX: e.clientX, startY: e.clientY, origX: viewport.x, origY: viewport.y }
             }
           }}
@@ -922,28 +1193,32 @@ export default function BoardView() {
             addNoteAt(p.x, p.y)
           }}
         >
-          {/* Canvas toolbar */}
-          <div className="absolute z-10 top-3 left-3 flex items-center gap-2 bg-slate-950/70 border border-slate-800 rounded-md px-2 py-1 backdrop-blur-sm">
-            <button className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700" onClick={() => zoomBy(1/1.1)} title="Zoom out"><ZoomOut className="w-4 h-4" /></button>
-            <button className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700" onClick={() => zoomBy(1.1)} title="Zoom in"><ZoomIn className="w-4 h-4" /></button>
-            <button className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700" onClick={resetZoom} title="Reset zoom"><RefreshCcw className="w-4 h-4" /></button>
-            <button className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700" onClick={fitToContent} title="Fit to content"><Maximize2 className="w-4 h-4" /></button>
+          {/* Canvas toolbar (clean, no background) */}
+          <motion.div className="absolute z-10 top-3 left-3 flex items-center gap-2"
+            initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}
+          >
+            <button className="p-1.5 rounded hover:bg-slate-800/60" onClick={() => zoomBy(1/1.1)} title="Zoom out"><ZoomOut className="w-4 h-4" /></button>
+            <button className="p-1.5 rounded hover:bg-slate-800/60" onClick={() => zoomBy(1.1)} title="Zoom in"><ZoomIn className="w-4 h-4" /></button>
+            <button className="p-1.5 rounded hover:bg-slate-800/60" onClick={resetZoom} title="Reset zoom"><RefreshCcw className="w-4 h-4" /></button>
+            <button className="p-1.5 rounded hover:bg-slate-800/60" onClick={fitToContent} title="Fit to content"><Maximize2 className="w-4 h-4" /></button>
             <div className="mx-2 text-xs text-slate-300">{Math.round(viewport.zoom * 100)}%</div>
             <button
-              className={`px-2 py-1 text-xs rounded border ${linkMode ? 'bg-emerald-700/70 border-emerald-600' : 'bg-slate-800 hover:bg-slate-700 border-slate-700'}`}
+              className={`px-2 py-1 text-xs rounded ${linkMode ? 'bg-emerald-700/70' : 'hover:bg-slate-800/60'}`}
               onClick={() => { setLinkMode(v => !v); setLinkSource(null) }}
               title="Link Mode"
             >{linkMode ? <span className="flex items-center gap-1"><Link2 className="w-4 h-4" /> ON</span> : <span className="flex items-center gap-1"><Link2 className="w-4 h-4" /> OFF</span>}</button>
             {selectedEdgeId && (
-              <button className="px-2 py-1 text-xs rounded bg-rose-800/70 hover:bg-rose-700 border border-rose-700 ml-2 flex items-center gap-1" onClick={deleteSelectedEdge} title="Delete selected edge"><Unlink className="w-4 h-4" /> Delete Edge</button>
+              <button className="px-2 py-1 text-xs rounded bg-rose-800/70 hover:bg-rose-700 ml-2 flex items-center gap-1" onClick={deleteSelectedEdge} title="Delete selected edge"><Unlink className="w-4 h-4" /> Delete Edge</button>
             )}
-          </div>
-          {/* Floating Tools palette (left side) */}
-          <div className="absolute z-10 left-3 top-1/2 -translate-y-1/2 flex flex-col gap-2 bg-slate-950/70 border border-slate-800 rounded-md p-2 backdrop-blur-sm">
+          </motion.div>
+          {/* Floating Tools palette (clean, no background) */}
+          <motion.div className="absolute z-10 left-1/2 top-3 -translate-x-1/2 flex flex-row gap-2"
+            initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}
+          >
             {/* Draw button */}
             <button
-              onClick={() => { setDrawMode(true); setLinkMode(false); setLinkSource(null); setSelectedEdgeId(null) }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 select-none text-xs"
+              onClick={() => { setDrawMode(true); setLinkMode(false); setLinkSource(null); setSelectedEdgeId(null); setFlashPop(null); setRingPop(null); boxSelRef.current = null; setBoxSel(null) }}
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 select-none text-xs"
               title="Enter Draw mode"
             >
               <Pencil className="w-4 h-4 text-emerald-400" /> Draw
@@ -951,7 +1226,7 @@ export default function BoardView() {
             <div
               draggable
               onDragStart={(e)=>{ e.dataTransfer.setData('application/x-board-tool', 'note'); e.dataTransfer.effectAllowed = 'copy' }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 cursor-grab active:cursor-grabbing select-none text-xs"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 cursor-grab active:cursor-grabbing select-none text-xs"
               title="Drag onto the canvas to create a Note"
             >
               <StickyNote className="w-4 h-4 text-emerald-400" /> Note
@@ -959,7 +1234,7 @@ export default function BoardView() {
             <div
               draggable
               onDragStart={(e)=>{ e.dataTransfer.setData('application/x-board-tool', 'checklist'); e.dataTransfer.effectAllowed = 'copy' }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 cursor-grab active:cursor-grabbing select-none text-xs"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 cursor-grab active:cursor-grabbing select-none text-xs"
               title="Drag onto the canvas to create a Checklist"
             >
               <ListChecks className="w-4 h-4 text-emerald-400" /> Checklist
@@ -967,7 +1242,7 @@ export default function BoardView() {
             <div
               draggable
               onDragStart={(e)=>{ e.dataTransfer.setData('application/x-board-tool', 'image'); e.dataTransfer.effectAllowed = 'copy' }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 cursor-grab active:cursor-grabbing select-none text-xs"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 cursor-grab active:cursor-grabbing select-none text-xs"
               title="Drag onto the canvas to create an Image card"
             >
               <ImageIcon className="w-4 h-4 text-emerald-400" /> Image
@@ -975,7 +1250,7 @@ export default function BoardView() {
             <div
               draggable
               onDragStart={(e)=>{ e.dataTransfer.setData('application/x-board-tool', 'link'); e.dataTransfer.effectAllowed = 'copy' }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 cursor-grab active:cursor-grabbing select-none text-xs"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 cursor-grab active:cursor-grabbing select-none text-xs"
               title="Drag onto the canvas to create a Link card"
             >
               <Link2 className="w-4 h-4 text-emerald-400" /> Link
@@ -983,7 +1258,7 @@ export default function BoardView() {
             <div
               draggable
               onDragStart={(e)=>{ e.dataTransfer.setData('application/x-board-tool', 'group'); e.dataTransfer.effectAllowed = 'copy' }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 cursor-grab active:cursor-grabbing select-none text-xs"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 cursor-grab active:cursor-grabbing select-none text-xs"
               title="Drag onto the canvas to create a Group"
             >
               <Shapes className="w-4 h-4 text-emerald-400" /> Group
@@ -991,7 +1266,7 @@ export default function BoardView() {
             <div
               draggable
               onDragStart={(e)=>{ e.dataTransfer.setData('application/x-board-tool', 'table'); e.dataTransfer.effectAllowed = 'copy' }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 cursor-grab active:cursor-grabbing select-none text-xs"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 cursor-grab active:cursor-grabbing select-none text-xs"
               title="Drag onto the canvas to create a Table"
             >
               <TableIcon className="w-4 h-4 text-emerald-400" /> Table
@@ -999,18 +1274,58 @@ export default function BoardView() {
             <div
               draggable
               onDragStart={(e)=>{ e.dataTransfer.setData('application/x-board-tool', 'column'); e.dataTransfer.effectAllowed = 'copy' }}
-              className="flex items-center gap-2 px-2 py-1 rounded border border-slate-800 bg-slate-900/60 hover:bg-slate-800 cursor-grab active:cursor-grabbing select-none text-xs"
+              className="flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800/60 cursor-grab active:cursor-grabbing select-none text-xs"
               title="Drag onto the canvas to create a Column"
             >
               <ColumnsIcon className="w-4 h-4 text-emerald-400" /> Column
             </div>
-          </div>
-          {loading && <div className="p-4 text-slate-400">Loading…</div>}
+            {/* Integrations as a single button that reveals options */}
+            <IntegrationsDrawer />
+          </motion.div>
+          {loading && (
+            <div className="p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="rounded-md border border-slate-800 bg-slate-900/60 p-2">
+                  <div className="h-6 w-1/2 skeleton rounded" />
+                  <div className="h-4 w-2/3 skeleton rounded mt-2" />
+                </div>
+              ))}
+            </div>
+          )}
           {!loading && (
             <div
               className="relative"
               style={{ width: boardSize.w, height: boardSize.h, transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`, transformOrigin: '0 0' }}
+              onMouseDown={(e)=>{
+                // Close flashcard popout when clicking off any pop elements
+                const el = e.target as HTMLElement
+                const offFlash = flashPop && !el.closest('[data-role="flash-pop"]') && !el.closest('[data-role="studyset-card"]')
+                const offRing = ringPop && !el.closest('[data-role="ring-pop"]') && !el.closest('[data-role="studyset-card"]')
+                if (offFlash) setFlashPop(null)
+                if (offRing) setRingPop(null)
+                if (e.button !== 0) return
+                // Start pan with Space anywhere on board background
+                if (isSpaceDown) {
+                  panRef.current = { startX: e.clientX, startY: e.clientY, origX: viewport.x, origY: viewport.y }
+                  return
+                }
+                // Marquee only when clicking empty board area (not on an item)
+                const onItem = !!el.closest('[data-item-id]')
+                if (!onItem) {
+                  e.preventDefault()
+                  const p = toBoardCoords(e.clientX, e.clientY)
+                  boxSelRef.current = { start: p, additive: e.shiftKey, originSel: sel }
+                  setBoxSel({ x: p.x, y: p.y, w: 0, h: 0 })
+                }
+              }}
             >
+              {/* Marquee rectangle (board-space, respects zoom via parent transform) */}
+              {boxSel && !drawMode && (
+                <div
+                  className="absolute border border-emerald-400/60 bg-emerald-400/10 rounded-sm pointer-events-none"
+                  style={{ left: boxSel.x, top: boxSel.y, width: boxSel.w, height: boxSel.h }}
+                />
+              )}
               {/* Edges (SVG below items to reduce overlay) */}
               <svg className="absolute inset-0" width={boardSize.w} height={boardSize.h} style={{ pointerEvents: 'auto' }}>
                 <defs>
@@ -1033,10 +1348,11 @@ export default function BoardView() {
                   return (
                     <g key={e.id || idx} onClick={(ev) => { ev.stopPropagation(); setSelectedEdgeId(isSel ? null : (e.id || null)) }}>
                       <line
+                        className={`edge-line ${isSel ? 'edge-selected' : ''}`}
                         x1={x1} y1={y1} x2={x2} y2={y2}
                         stroke={isSel ? '#22c55e' : '#64748b'}
                         strokeWidth={isSel ? 3 : 2}
-                        strokeOpacity={0.9}
+                        strokeOpacity={0.95}
                         markerEnd={isSel ? 'url(#arrow-selected)' : 'url(#arrow)'}
                       />
                       {e.label && (
@@ -1051,16 +1367,32 @@ export default function BoardView() {
                   if (!s) return null
                   const x1 = s.x + s.w / 2
                   const y1 = s.y + s.h / 2
-                  return <line x1={x1} y1={y1} x2={mousePos.x} y2={mousePos.y} stroke="#22c55e" strokeDasharray="4 4" strokeWidth={2} />
+                  return <line x1={x1} y1={y1} x2={mousePos.x} y2={mousePos.y} stroke="#22c55e" className="dash-flow" strokeWidth={2} />
                 })()}
               </svg>
+              <AnimatePresence>
               {items.map(it => (
-                <div
+                <motion.div
                   key={it.id}
-                  className={`absolute rounded-md border ${sel[it.id] ? 'border-emerald-400' : linkMode && linkSource === it.id ? 'border-emerald-500' : 'border-slate-700'} bg-slate-800/60 hover:border-slate-600 shadow-sm`}
+                  initial={{ opacity: 0, scale: 0.98, y: 6 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.97, y: 6 }}
+                  transition={{ duration: 0.2 }}
+                  whileHover={{ y: -1, scale: 1.005 }}
+                  whileTap={{ scale: 0.995 }}
+                  className={`absolute rounded-md 
+                    ${(it.type==='image' && isDrawableImageContent(it.content)) || it.type==='draw'
+                      ? 'border border-transparent bg-transparent shadow-none'
+                      : 'border bg-slate-800/60 hover:border-slate-600 shadow-sm'}
+                    ${sel[it.id]
+                      ? ((it.type==='image' && isDrawableImageContent(it.content)) || it.type==='draw' ? 'ring-emerald-animated' : 'border-emerald-400 ring-emerald-animated')
+                      : (linkMode && linkSource === it.id ? (((it.type==='image' && isDrawableImageContent(it.content)) || it.type==='draw') ? '' : 'border-emerald-500') : (((it.type==='image' && isDrawableImageContent(it.content)) || it.type==='draw') ? '' : 'border-slate-700'))}
+                  `}
                   style={{ left: it.x, top: it.y, width: it.w, height: it.h, zIndex: it.type === 'column' ? 1 : it.type === 'group' ? 2 : 3 }}
                   data-item-id={it.id}
                   onMouseDown={(e) => {
+                    // Stop board-level marquee from starting from this event
+                    e.stopPropagation()
                     // If clicking on content area (textarea), don't start drag
                     const target = e.target as HTMLElement
                     if (target.closest('textarea')) return
@@ -1093,25 +1425,31 @@ export default function BoardView() {
                     dragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, origX: it.x, origY: it.y }
                   }}
                 >
-                  {/* Drag handle (top bar) */}
-                  <div
-                    className="h-6 cursor-move rounded-t-md bg-slate-900/40 border-b border-slate-700 flex items-center px-2 text-[11px] text-slate-400 select-none"
-                    onMouseDown={(e) => {
-                      e.stopPropagation()
-                      dragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, origX: it.x, origY: it.y }
-                    }}
-                  >
-                    <div className="flex items-center gap-1">
-                      {it.type === 'note' && <StickyNote className="w-3.5 h-3.5" />}
-                      {it.type === 'checklist' && <ListChecks className="w-3.5 h-3.5" />}
-                      {it.type === 'image' && <ImageIcon className="w-3.5 h-3.5" />}
-                      {it.type === 'link' && <Link2 className="w-3.5 h-3.5" />}
-                      {it.type === 'group' && <Shapes className="w-3.5 h-3.5" />}
-                      {it.type === 'table' && <TableIcon className="w-3.5 h-3.5" />}
-                      {it.type === 'column' && <ColumnsIcon className="w-3.5 h-3.5" />}
-                      <span className="capitalize text-slate-400">{it.type}</span>
+                  {/* Drag handle (top bar) - hidden for vector drawings and drawable images */}
+                  {!(((it.type==='image' && isDrawableImageContent(it.content)) || it.type==='draw')) && (
+                    <div
+                      className="h-6 cursor-move rounded-t-md bg-slate-900/40 border-b border-slate-700 flex items-center px-2 text-[11px] text-slate-400 select-none"
+                      onMouseDown={(e) => {
+                        e.stopPropagation()
+                        dragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, origX: it.x, origY: it.y }
+                      }}
+                    >
+                      <div className="flex items-center gap-1">
+                        {it.type === 'note' && <StickyNote className="w-3.5 h-3.5" />}
+                        {it.type === 'checklist' && <ListChecks className="w-3.5 h-3.5" />}
+                        {it.type === 'image' && <ImageIcon className="w-3.5 h-3.5" />}
+                        {it.type === 'link' && <Link2 className="w-3.5 h-3.5" />}
+                        {it.type === 'group' && <Shapes className="w-3.5 h-3.5" />}
+                        {it.type === 'table' && <TableIcon className="w-3.5 h-3.5" />}
+                        {it.type === 'studyset' && <ListChecks className="w-3.5 h-3.5" />}
+                        {it.type === 'column' && <ColumnsIcon className="w-3.5 h-3.5" />}
+                        <span className="capitalize text-slate-400">{it.type}</span>
+                      </div>
                     </div>
-                  </div>
+                  )}
+                  {it.type === 'draw' && (
+                    <DrawItemView item={it} onEdit={() => beginEditDrawing(it)} />
+                  )}
 
                   {/* Content */}
                   {it.type === 'note' && (
@@ -1230,8 +1568,84 @@ export default function BoardView() {
                       {it.content?.desc && <div className="text-xs text-slate-400 mt-1">{it.content.desc}</div>}
                     </div>
                   )}
+                  {it.type === 'studyset' && (
+                    <div className="p-2 text-sm text-slate-200 select-none" onClick={(e)=> e.stopPropagation()} data-role="studyset-card">
+                      <div className="font-medium text-slate-100 truncate" title={it.content?.title || 'Study Set'}>{it.content?.title || 'Study Set'}</div>
+                      {it.content?.subject && <div className="text-xs text-slate-400 mt-0.5">{it.content.subject}</div>}
+                      <div className="text-xs text-slate-400 mt-1">{(it.content?.openMode||'flashcards')==='flashcards' ? 'Flashcards preview' : `Open ${(it.content?.openMode||'flashcards')}`}</div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          className="jarvis-btn jarvis-btn-secondary px-2 py-1 text-xs"
+                          onClick={async ()=>{
+                            const mode = (it.content?.openMode||'flashcards') as 'flashcards'|'guide'|'test'|'match'
+                            const sid = it.content?.studySetId
+                            if (!sid) return
+                            // Toggle behavior
+                            if (mode === 'flashcards') {
+                              if (flashPop?.itemId === it.id) { setFlashPop(null); return }
+                              try {
+                                const set = await getStudySet(sid)
+                                const cards = (set?.content?.flashcards || []) as Flashcard[]
+                                const sample = cards.slice(0, Math.min(cards.length, 8))
+                                setFlashPop({ itemId: it.id, studySetId: sid, cards: sample, flipped: {} })
+                              } catch {}
+                            } else if (mode === 'guide') {
+                              if (ringPop?.itemId === it.id && ringPop?.mode === 'guide') { setRingPop(null); return }
+                              try {
+                                const set = await getStudySet(sid)
+                                const guide = (set?.content?.guide || '') as string
+                                const sentences = (guide || '')
+                                  .replace(/\n+/g, ' ')
+                                  .split(/(?<=[.!?])\s+/)
+                                  .filter(Boolean)
+                                const sample = sentences.slice(0, Math.min(sentences.length, 8))
+                                const entries = sample.map(s => ({ front: s, back: 'Continue…' }))
+                                setFlashPop(null)
+                                setRingPop({ itemId: it.id, studySetId: sid, mode: 'guide', entries, flipped: {} })
+                              } catch {}
+                            } else if (mode === 'test') {
+                              if (ringPop?.itemId === it.id && ringPop?.mode === 'test') { setRingPop(null); return }
+                              try {
+                                const set = await getStudySet(sid)
+                                const test = (set?.content?.test || []) as McqQuestion[]
+                                const sample = test.slice(0, Math.min(test.length, 8))
+                                const entries = sample.map(q => ({ front: q.question, back: (q.choices?.[q.answerIndex] || '') }))
+                                setFlashPop(null)
+                                setRingPop({ itemId: it.id, studySetId: sid, mode: 'test', entries, flipped: {} })
+                              } catch {}
+                            } else if (mode === 'match') {
+                              if (ringPop?.itemId === it.id && ringPop?.mode === 'match') { setRingPop(null); return }
+                              try {
+                                const set = await getStudySet(sid)
+                                const match = (set?.content?.match || []) as MatchPair[]
+                                const sample = match.slice(0, Math.min(match.length, 10))
+                                const entries = sample.map(p => ({ front: p.left, back: p.right }))
+                                setFlashPop(null)
+                                setRingPop({ itemId: it.id, studySetId: sid, mode: 'match', entries, flipped: {} })
+                              } catch {}
+                            }
+                          }}
+                        >Preview</button>
+                        {(() => {
+                          const sid = encodeURIComponent(it.content?.studySetId||'')
+                          const mode = (it.content?.openMode||'flashcards') as 'flashcards'|'guide'|'test'|'match'
+                          const href = mode==='guide' ? `/study/sets/${sid}/enhanced` : mode==='test' ? `/study/sets/${sid}/test` : mode==='match' ? `/study/sets/${sid}/match` : `/study/sets/${sid}/flashcards`
+                          return <a href={href} target="_blank" rel="noreferrer" className="text-[11px] text-emerald-400 hover:text-emerald-300">Open</a>
+                        })()}
+                      </div>
+                    </div>
+                  )}
                   {it.type === 'image' && (
-                    <div className="w-full h-[calc(100%-1.5rem)] flex items-center justify-center bg-slate-900/30 relative" onClick={(e)=> e.stopPropagation()}>
+                    <div
+                      className={`${isDrawableImageContent(it.content) ? 'h-full bg-transparent' : 'h-[calc(100%-1.5rem)] bg-slate-900/30'} w-full flex items-center justify-center relative`}
+                      onClick={(e)=> e.stopPropagation()}
+                      onMouseDown={(e)=>{
+                        if (isDrawableImageContent(it.content)) {
+                          e.stopPropagation()
+                          dragRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, origX: it.x, origY: it.y }
+                        }
+                      }}
+                    >
                       {it.content?.url ? (
                         <img src={it.content.url} alt={it.content?.caption || ''} className="max-w-full max-h-full object-contain rounded" />
                       ) : (
@@ -1371,31 +1785,151 @@ export default function BoardView() {
                   )}
 
                   {/* Resize handle */}
-                  <div
-                    className="absolute right-1 bottom-1 w-3 h-3 bg-slate-600 rounded-sm cursor-se-resize"
-                    onMouseDown={(e) => {
-                      e.stopPropagation()
-                      resizeRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, origW: it.w, origH: it.h }
-                    }}
-                  />
-                </div>
+                  {!(((it.type==='image' && isDrawableImageContent(it.content)) || it.type==='draw')) && (
+                    <div
+                      className="absolute right-1 bottom-1 w-3 h-3 bg-slate-600 rounded-sm cursor-se-resize"
+                      onMouseDown={(e) => {
+                        e.stopPropagation()
+                        resizeRef.current = { id: it.id, startX: e.clientX, startY: e.clientY, origW: it.w, origH: it.h }
+                      }}
+                    />
+                  )}
+                </motion.div>
               ))}
+              </AnimatePresence>
+
+              {/* Flashcards radial popout overlay */}
+              {flashPop && (() => {
+                const host = items.find(i => i.id === flashPop.itemId)
+                if (!host) return null
+                const cx = host.x + host.w/2
+                const cy = host.y + host.h/2
+                const n = flashPop.cards.length
+                // Compute per-card dimensions from text
+                const dims = flashPop.cards.map(c => estimateFlashDims(c.front, c.back))
+                const maxDim = dims.reduce((m, d) => Math.max(m, Math.max(d.w, d.h)), Math.max(host.w, host.h))
+                const radius = Math.max(160, Math.min(300, maxDim + 40))
+                return (
+                  <>
+                    {/* click-capture layer to close when clicking off */}
+                    <div className="absolute inset-0 z-40" onMouseDown={()=>setFlashPop(null)} />
+                    {flashPop.cards.map((c, i) => {
+                      const d = dims[i]
+                      const ang = (Math.PI * 2 * i) / Math.max(1, n)
+                      const x = Math.round(cx + radius * Math.cos(ang) - d.w/2)
+                      const y = Math.round(cy + radius * Math.sin(ang) - d.h/2)
+                      const flipped = !!flashPop.flipped[i]
+                      return (
+                        <motion.div
+                          key={i}
+                          className="absolute z-50"
+                          style={{ left: x, top: y, width: d.w, height: d.h }}
+                          initial={{ opacity: 0, scale: 0.8, x: cx - x - d.w/2, y: cy - y - d.h/2 }}
+                          animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.8 }}
+                          transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+                          data-role="flash-pop"
+                          onMouseDown={(e)=>{ e.stopPropagation() }}
+                          onClick={(e)=>{ e.stopPropagation(); setFlashPop(prev => prev ? { ...prev, flipped: { ...prev.flipped, [i]: !prev.flipped[i] } } : prev) }}
+                        >
+                          {/* simple flip card */}
+                          <div className="w-full h-full [perspective:800px]">
+                            <div className={`relative w-full h-full transition-transform duration-300 [transform-style:preserve-3d] ${flipped ? '[transform:rotateY(180deg)]' : ''}`}>
+                              <div className="absolute inset-0 rounded-md border border-slate-700 bg-slate-900/80 p-2 text-xs text-slate-100 [backface-visibility:hidden] overflow-hidden">
+                                <div className="font-semibold mb-1 break-words" title={c.front}>{c.front}</div>
+                                <div className="text-[11px] text-slate-400">Click to show answer</div>
+                              </div>
+                              <div className="absolute inset-0 rounded-md border border-emerald-700 bg-emerald-900/80 p-2 text-xs text-slate-100 [backface-visibility:hidden] [transform:rotateY(180deg)] overflow-hidden">
+                                <div className="font-semibold mb-1 break-words" title={c.back}>{c.back}</div>
+                                <div className="text-[11px] text-emerald-300">Click to flip back</div>
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )
+                    })}
+                  </>
+                )
+              })()}
+
+              {/* Radial ring popout for guide/test/match */}
+              {ringPop && (() => {
+                const host = items.find(i => i.id === ringPop.itemId)
+                if (!host) return null
+                const cx = host.x + host.w/2
+                const cy = host.y + host.h/2
+                const n = ringPop.entries.length
+                const dims = ringPop.entries.map(e => estimateFlashDims(e.front, e.back))
+                const maxDim = dims.reduce((m, d) => Math.max(m, Math.max(d.w, d.h)), Math.max(host.w, host.h))
+                const radius = Math.max(160, Math.min(320, maxDim + 60))
+                return (
+                  <>
+                    <div className="absolute inset-0 z-40" onMouseDown={()=>setRingPop(null)} />
+                    {ringPop.entries.map((e, i) => {
+                      const d = dims[i]
+                      const ang = (Math.PI * 2 * i) / Math.max(1, n)
+                      const x = Math.round(cx + radius * Math.cos(ang) - d.w/2)
+                      const y = Math.round(cy + radius * Math.sin(ang) - d.h/2)
+                      const flipped = !!ringPop.flipped[i]
+                      return (
+                        <motion.div
+                          key={i}
+                          className="absolute z-50"
+                          style={{ left: x, top: y, width: d.w, height: d.h }}
+                          initial={{ opacity: 0, scale: 0.8, x: cx - x - d.w/2, y: cy - y - d.h/2 }}
+                          animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.8 }}
+                          transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+                          data-role="ring-pop"
+                          onMouseDown={(ev)=>{ ev.stopPropagation() }}
+                          onClick={(ev)=>{ ev.stopPropagation(); setRingPop(prev => prev ? { ...prev, flipped: { ...prev.flipped, [i]: !prev.flipped[i] } } : prev) }}
+                        >
+                          <div className="w-full h-full [perspective:800px]">
+                            <div className={`relative w-full h-full transition-transform duration-300 [transform-style:preserve-3d] ${flipped ? '[transform:rotateY(180deg)]' : ''}`}>
+                              <div className="absolute inset-0 rounded-md border border-slate-700 bg-slate-900/80 p-2 text-xs text-slate-100 [backface-visibility:hidden] overflow-hidden">
+                                <div className="font-semibold mb-1 break-words" title={e.front}>{e.front}</div>
+                                <div className="text-[11px] text-slate-400">Click to flip</div>
+                              </div>
+                              <div className="absolute inset-0 rounded-md border border-emerald-700 bg-emerald-900/80 p-2 text-xs text-slate-100 [backface-visibility:hidden] [transform:rotateY(180deg)] overflow-hidden">
+                                <div className="font-semibold mb-1 break-words" title={e.back}>{e.back || '—'}</div>
+                                <div className="text-[11px] text-emerald-300">Click to flip back</div>
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )
+                    })}
+                  </>
+                )
+              })()}
             </div>
           )}
 
           {/* Drawing overlay inside the canvas container */}
-          {drawMode && (
+          {drawMode && boardSize.w > 0 && boardSize.h > 0 && (
             <>
               {/* Darken the board area */}
-              <div className="absolute inset-0 z-20 bg-black/60" />
+              <motion.div className="absolute inset-0 z-20 bg-black/60" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+              {/* Quick close button */}
+              <motion.button
+                className="fixed top-3 right-3 z-50 jarvis-btn jarvis-btn-secondary"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                onClick={() => { if (hasPendingDrawing()) { void saveDrawing() } else { discardDrawing() } }}
+                title="Exit Draw"
+              >Exit</motion.button>
               {/* Canvas for drawing (aligned to board transform) */}
-              <div
+              <motion.div
                 className="absolute inset-0 z-30"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
                 onPointerDown={(e) => {
                   // Allow pen, mouse, or touch
                   e.preventDefault()
-                  ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+                  try { (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId) } catch {}
                   const p = toBoardCoords(e.clientX, e.clientY)
+                  if (!isFinite(p.x) || !isFinite(p.y)) return
                   drawingRef.current = true
                   const stroke: Stroke = { points: [p], color: drawColor, size: drawSize, tool: drawTool }
                   currStrokeRef.current = stroke
@@ -1407,22 +1941,38 @@ export default function BoardView() {
                   if (!drawingRef.current || !currStrokeRef.current) return
                   e.preventDefault()
                   const p = toBoardCoords(e.clientX, e.clientY)
-                  currStrokeRef.current.points.push(p)
+                  if (!isFinite(p.x) || !isFinite(p.y)) return
+                  const pts = currStrokeRef.current.points
+                  const last = pts[pts.length-1]
+                  // downsample: only append if moved at least 0.8px in board coords
+                  if (!last || Math.hypot(p.x - last.x, p.y - last.y) >= 0.8) pts.push(p)
                   requestAnimationFrame(() => redrawDrawCanvas())
                 }}
-                onPointerUp={() => {
+                onPointerUp={(e) => {
                   if (!drawingRef.current || !currStrokeRef.current) return
                   drawingRef.current = false
-                  setStrokes(prev => [...prev, currStrokeRef.current as Stroke])
-                  currStrokeRef.current = null
-                  requestAnimationFrame(() => redrawDrawCanvas())
+                  const finished = currStrokeRef.current as Stroke
+                  setStrokes(prev => [...prev, finished])
+                  // Defer clearing current stroke until after React commits the strokes update
+                  setTimeout(() => {
+                    if (currStrokeRef.current === finished) currStrokeRef.current = null
+                    requestAnimationFrame(() => redrawDrawCanvas())
+                  }, 0)
+                  try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId) } catch {}
+                  // immediate draw to show final stroke without waiting for next stroke
+                  try { redrawDrawCanvas() } catch {}
                 }}
-                onPointerCancel={() => {
+                onPointerCancel={(e) => {
                   if (!drawingRef.current || !currStrokeRef.current) return
                   drawingRef.current = false
-                  setStrokes(prev => [...prev, currStrokeRef.current as Stroke])
-                  currStrokeRef.current = null
-                  requestAnimationFrame(() => redrawDrawCanvas())
+                  const finished = currStrokeRef.current as Stroke
+                  setStrokes(prev => [...prev, finished])
+                  setTimeout(() => {
+                    if (currStrokeRef.current === finished) currStrokeRef.current = null
+                    requestAnimationFrame(() => redrawDrawCanvas())
+                  }, 0)
+                  try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId) } catch {}
+                  try { redrawDrawCanvas() } catch {}
                 }}
                 style={{ cursor: drawTool === 'pen' ? 'crosshair' : 'cell', touchAction: 'none' as any }}
               >
@@ -1432,10 +1982,12 @@ export default function BoardView() {
                 >
                   <canvas ref={drawCanvasRef} width={Math.max(1, Math.round(boardSize.w))} height={Math.max(1, Math.round(boardSize.h))} style={{ width: boardSize.w, height: boardSize.h }} />
                 </div>
-              </div>
-              {/* Bottom customization bar */}
-              <div className="absolute left-0 right-0 bottom-0 z-40">
-                <div className="m-3 rounded-lg border border-slate-800 bg-slate-950/85 backdrop-blur-sm p-3 flex flex-wrap items-center gap-3">
+              </motion.div>
+              {/* Bottom customization bar (fixed so it stays in view) */}
+              <div className="fixed left-1/2 -translate-x-1/2 bottom-3 z-50 w-[min(980px,calc(100%-1.5rem))]">
+                <motion.div className="rounded-lg border border-slate-800 bg-slate-950/85 backdrop-blur-sm p-3 flex flex-wrap items-center gap-3 shadow-xl"
+                  initial={{ y: 12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ type: 'spring', stiffness: 320, damping: 24 }}
+                >
                   <div className="text-xs text-slate-300 mr-1">{editDrawingTargetId ? 'Edit Drawing' : 'Draw'}</div>
                   <div className="flex items-center gap-1">
                     <button
@@ -1468,13 +2020,16 @@ export default function BoardView() {
                     </label>
                   )}
                   <div className="flex items-center gap-2 ml-auto">
+                    <label className="hidden md:flex items-center gap-1 text-[10px] text-slate-500 mr-2 select-none">
+                      <input type="checkbox" checked={debugDraw} onChange={e=>setDebugDraw(e.target.checked)} /> Debug
+                    </label>
                     <button className="jarvis-btn jarvis-btn-secondary" onClick={undoDrawing} disabled={strokes.length===0}>Undo</button>
                     <button className="jarvis-btn jarvis-btn-secondary" onClick={redoDrawing} disabled={redoStack.length===0}>Redo</button>
                     <button className="jarvis-btn jarvis-btn-secondary" onClick={()=>{ setStrokes([]); setRedoStack([]); currStrokeRef.current=null; redrawDrawCanvas() }}>Clear</button>
                     <button className="jarvis-btn jarvis-btn-secondary" onClick={discardDrawing}>{editDrawingTargetId ? 'Cancel' : 'Discard'}</button>
                     <button className="jarvis-btn jarvis-btn-primary" onClick={saveDrawing}>{editDrawingTargetId ? 'Update' : 'Save'}</button>
                   </div>
-                </div>
+                </motion.div>
               </div>
             </>
           )}
@@ -1532,24 +2087,85 @@ export default function BoardView() {
         </div>
       </div>
     </div>
+    </BoardErrorBoundary>
+  )
+}
+
+// Lightweight view for vector draw items. Renders strokes on a canvas sized to the item.
+function DrawItemView(props: { item: BoardItem; onEdit: () => void }) {
+  const { item, onEdit } = props
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
+  // Re-draw when item changes
+  React.useEffect(() => {
+    try {
+      const c = canvasRef.current
+      if (!c) return
+      const ctx = c.getContext('2d')
+      if (!ctx) return
+      ctx.clearRect(0, 0, c.width, c.height)
+      const strokes: any[] = Array.isArray((item as any)?.content?.strokes) ? (item as any).content.strokes : []
+      for (const s of strokes) {
+        const pts = (s.points || []) as Array<{x:number;y:number}>
+        if (!pts.length) continue
+        // Points are local to the item; draw directly
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.lineWidth = Math.max(1, Number(s.width || s.size || 2))
+        ctx.strokeStyle = s.color || '#22c55e'
+        const prev = ctx.globalCompositeOperation
+        ctx.globalCompositeOperation = (s.tool === 'eraser') ? 'destination-out' : 'source-over'
+        ctx.beginPath()
+        ctx.moveTo(pts[0].x, pts[0].y)
+        for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y)
+        ctx.stroke()
+        ctx.globalCompositeOperation = prev
+      }
+    } catch {}
+  }, [item])
+
+  // Keep backing store in sync
+  React.useEffect(() => {
+    const c = canvasRef.current
+    if (!c) return
+    const w = Math.max(1, Math.round(item.w))
+    const h = Math.max(1, Math.round(item.h))
+    if (c.width !== w) c.width = w
+    if (c.height !== h) c.height = h
+  }, [item.w, item.h])
+
+  return (
+    <div
+      className="w-full h-full relative bg-transparent"
+    >
+      <canvas ref={canvasRef} width={Math.max(1, Math.round(item.w))} height={Math.max(1, Math.round(item.h))} style={{ width: item.w, height: item.h }} />
+      <div className="absolute bottom-2 right-2 flex gap-2">
+        <button
+          className="px-2 py-1 text-[11px] rounded bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-200"
+          onClick={(e)=>{ e.stopPropagation(); onEdit() }}
+          title="Edit drawing"
+        >Edit</button>
+      </div>
+    </div>
   )
 }
 
 // Helper: draw all strokes + current onto the draw canvas
 export function drawStrokePath(ctx: CanvasRenderingContext2D, stroke: { points: {x:number;y:number}[]; color: string; size: number; tool: 'pen'|'eraser' }) {
-  const pts = stroke.points
-  if (!pts.length) return
-  ctx.lineCap = 'round'
-  ctx.lineJoin = 'round'
-  ctx.lineWidth = Math.max(1, stroke.size)
-  ctx.strokeStyle = stroke.color
-  const prevOp = ctx.globalCompositeOperation
-  ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over'
-  ctx.beginPath()
-  ctx.moveTo(pts[0].x, pts[0].y)
-  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
-  ctx.stroke()
-  ctx.globalCompositeOperation = prevOp
+  try {
+    const pts = stroke.points || []
+    if (!pts.length) return
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = Math.max(1, stroke.size || 1)
+    ctx.strokeStyle = stroke.color || '#22c55e'
+    const prevOp = ctx.globalCompositeOperation
+    ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over'
+    ctx.beginPath()
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+    ctx.stroke()
+    ctx.globalCompositeOperation = prevOp
+  } catch {}
 }
 
 // Helper to decide whether an image item is editable as a drawing
@@ -1558,4 +2174,27 @@ export function isDrawableImageContent(content: any): boolean {
     const vs = content?.vectorStrokes
     return Array.isArray(vs) && vs.length > 0
   } catch { return false }
+}
+
+// Pure helpers for converting strokes between local draw item coords and board coords
+export function toBoardStrokes(local: Array<{ points: {x:number;y:number}[]; color: string; size?: number; width?: number; tool?: 'pen'|'eraser' }>, origin: { x: number; y: number }): Array<{ points: {x:number;y:number}[]; color: string; size: number; tool: 'pen'|'eraser' }>{
+  try {
+    return (local||[]).map(s => ({
+      points: (s.points||[]).map(p => ({ x: (p?.x||0) + origin.x, y: (p?.y||0) + origin.y })),
+      color: s.color || '#22c55e',
+      size: Number(s.size || s.width || 4),
+      tool: (s.tool as any) === 'eraser' ? 'eraser' : 'pen'
+    }))
+  } catch { return [] }
+}
+
+export function toLocalStrokes(board: Array<{ points: {x:number;y:number}[]; color: string; size?: number; tool?: 'pen'|'eraser' }>, origin: { x: number; y: number }): Array<{ points: {x:number;y:number}[]; color: string; width: number; tool: 'pen'|'eraser' }>{
+  try {
+    return (board||[]).map(s => ({
+      points: (s.points||[]).map(p => ({ x: (p?.x||0) - origin.x, y: (p?.y||0) - origin.y })),
+      color: s.color || '#22c55e',
+      width: Number(s.size || 4),
+      tool: (s.tool as any) === 'eraser' ? 'eraser' : 'pen'
+    }))
+  } catch { return [] }
 }

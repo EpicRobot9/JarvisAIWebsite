@@ -104,6 +104,51 @@ export function createBoardMcpServer(prisma: PrismaClient) {
     return { content: [{ type: 'text', text: JSON.stringify({ ok: true, item }) }] }
   })
 
+  // Integration discovery: return available integration providers and items for the board's user
+  server.registerTool('list_integrations', {
+    description: 'List available board integrations and items for the current user',
+    inputSchema: { boardId: z.string().describe('Board ID') }
+  }, async ({ boardId }: any) => {
+    const board = await (prisma as any).board.findUnique({ where: { id: boardId } })
+    if (!board) throw new Error('board_not_found')
+    const userId = board.userId
+    // Study Sets provider
+    const studySets = await (prisma as any).studySet.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 50 })
+    const providers = [
+      {
+        id: 'study-sets',
+        name: 'Study Sets',
+        items: studySets.map((s:any)=> ({ id: s.id, title: s.title, subtitle: s.subject || '', kind: 'studySet' }))
+      }
+    ]
+    return { content: [{ type: 'text', text: JSON.stringify({ providers }) }] }
+  })
+
+  // Create a board item from an integration item (first: Study Sets → link card to flashcards)
+  server.registerTool('create_integration_item', {
+    description: 'Create a board item from an integration payload, e.g., add a Study Set link card',
+    inputSchema: {
+      boardId: z.string(),
+      providerId: z.string(),
+      itemId: z.string(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      w: z.number().optional(),
+      h: z.number().optional()
+    }
+  }, async ({ boardId, providerId, itemId, x, y, w, h }: any) => {
+    const board = await (prisma as any).board.findUnique({ where: { id: boardId } })
+    if (!board) throw new Error('board_not_found')
+    if (providerId === 'study-sets') {
+      const set = await (prisma as any).studySet.findUnique({ where: { id: itemId } })
+      if (!set || set.userId !== board.userId) throw new Error('set_not_found_or_forbidden')
+      const url = `/study/sets/${encodeURIComponent(set.id)}/flashcards`
+      const item = await (prisma as any).boardItem.create({ data: { boardId, type: 'link', x: x ?? 160, y: y ?? 120, w: w ?? 360, h: h ?? 120, z: 0, rotation: 0, content: { url, title: set.title, desc: set.subject || 'Study Set' } } })
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, item }) }] }
+    }
+    throw new Error('unknown_provider')
+  })
+
   server.registerTool('create_column', {
     description: 'Create a visual column card for organizing items',
     inputSchema: { ...baseInput, title: z.string().optional() }
