@@ -21,12 +21,24 @@ jobs:
       - name: Install backend deps
         working-directory: backend
         run: |
-          npm ci || npm install
+          # Use package-lock.json if present, otherwise run npm install
+          if [ -f package-lock.json ]; then
+            echo "Found package-lock.json — running npm ci"
+            npm ci --no-audit --no-fund
+          else
+            echo "No package-lock.json — running npm install to produce one"
+            npm install --no-audit --no-fund
+          fi
 
       - name: Run migration guard
-        env:
-          # Optional: if you set secrets.DATABASE_URL to a staging DB, diff will run; otherwise guard skips diff.
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
+          # If a DATABASE_URL secret is configured, export it; otherwise, run without DB to avoid Prisma P1012
+          if [ -n "${{ secrets.DATABASE_URL }}" ]; then
+            export DATABASE_URL="${{ secrets.DATABASE_URL }}"
+            echo "DATABASE_URL provided — will run live diff against the database."
+          else
+            echo "DATABASE_URL not provided — running guard without live diff (schema validate + SQL scan only)."
+            unset DATABASE_URL || true
+          fi
           chmod +x scripts/*.sh || true
           ./scripts/guard-migrations.sh
